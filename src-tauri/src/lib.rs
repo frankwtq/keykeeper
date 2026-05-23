@@ -508,6 +508,39 @@ fn import_data(
     Ok(())
 }
 
+#[tauri::command]
+fn set_shortcut(
+    app: tauri::AppHandle,
+    state: tauri::State<AppState>,
+    shortcut: String,
+) -> Result<(), String> {
+    // Read old shortcut
+    let old = state.config.lock()
+        .map(|c| c.global_shortcut.clone())
+        .map_err(|e| e.to_string())?;
+
+    // Save new shortcut to config (memory + file) before trying to register
+    {
+        let data_dir = state.data_dir.clone();
+        let config_path = data_dir.parent().unwrap_or(&data_dir).join("config.json");
+        if let Ok(mut config) = state.config.lock() {
+            config.global_shortcut = shortcut.clone();
+            config.save(&config_path);
+        }
+    }
+
+    // Unregister old shortcut
+    if !old.is_empty() {
+        app.global_shortcut().unregister(old.as_str()).ok();
+    }
+    // Register new shortcut
+    if !shortcut.is_empty() {
+        app.global_shortcut().register(shortcut.as_str()).ok();
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -534,6 +567,7 @@ pub fn run() {
 
             let config_path = resolve_config_path(handle);
             let config = AppConfig::load(&config_path);
+            let shortcut_key = config.global_shortcut.clone();
 
             app.manage(AppState {
                 db: Mutex::new(conn),
@@ -541,19 +575,19 @@ pub fn run() {
                 data_dir,
             });
 
-            // Global shortcut
-            let handle_shortcut = app.handle().clone();
+            // Global shortcut - use config value
             app.handle().plugin(
                 tauri_plugin_global_shortcut::Builder::new()
-                    .with_handler(move |_app, shortcut, _event| {
-                        if shortcut.to_string() == "Alt+Space" {
-                            toggle_window(&handle_shortcut);
+                    .with_handler(move |app, _shortcut, event| {
+                        if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                            toggle_window(app);
                         }
                     })
                     .build(),
             )?;
-            // Register the default shortcut
-            app.global_shortcut().register("Alt+Space").ok();
+            if !shortcut_key.is_empty() {
+                app.global_shortcut().register(shortcut_key.as_str()).ok();
+            }
 
             // Intercept window close → hide to tray
             if let Some(window) = app.get_webview_window("main") {
@@ -611,6 +645,7 @@ pub fn run() {
             import_data,
             read_image,
             get_image_data,
+            set_shortcut,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

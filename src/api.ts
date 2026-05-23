@@ -107,3 +107,7 @@ export async function readImage(path: string): Promise<string> {
 export async function getImageData(id: string): Promise<string> {
   return invoke('get_image_data', { id });
 }
+
+export async function setShortcut(shortcut: string): Promise<void> {
+  return invoke('set_shortcut', { shortcut });
+}

@@ -1,14 +1,15 @@
 import { useEffect, useState, useCallback } from 'react';
-import { getConfig, getCategories, getItems, addCategory, deleteCategory, addItem, updateItem, deleteItem, incrementUsage, toggleFavorite, renameCategory, exportData, importData } from './api';
+import { getConfig, getCategories, getItems, addCategory, deleteCategory, addItem, updateItem, deleteItem, incrementUsage, toggleFavorite, renameCategory, exportData, importData, setShortcut } from './api';
 import type { AppConfig, Category, Item } from './types';
 import Sidebar from './components/Sidebar';
 import ItemList from './components/ItemList';
 import ItemDetail from './components/ItemDetail';
 import SearchBar from './components/SearchBar';
 import AddItemDialog from './components/AddItemDialog';
+import SettingsDialog from './components/SettingsDialog';
 import './App.css';
 
-const APP_VERSION = '0.2.3';
+const APP_VERSION = '0.3.3';
 
 export default function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -19,6 +20,7 @@ export default function App() {
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
   // In-app keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -127,6 +129,10 @@ export default function App() {
     setShowAddDialog(true);
   };
 
+  const handleSaveShortcut = async (shortcut: string) => {
+    await setShortcut(shortcut);
+  };
+
   const handleExport = useCallback(async () => {
     try {
       const { save } = await import('@tauri-apps/plugin-dialog');
@@ -174,6 +180,7 @@ export default function App() {
         <div className="header-right" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
           <button className="btn btn-sm" onClick={handleExport}>📦 导出</button>
           <button className="btn btn-sm" onClick={handleImport}>📂 导入</button>
+          <button className="btn btn-sm" onClick={() => setShowSettings(true)}>⚙ 设置</button>
           <button className="btn btn-primary" onClick={() => { setEditingItem(null); setShowAddDialog(true); }}>+ 新增</button>
         </div>
       </header>
@@ -217,6 +224,12 @@ export default function App() {
           editItem={editingItem}
           onSave={handleSaveItem}
           onClose={() => { setShowAddDialog(false); setEditingItem(null); }}
+        />
+      )}
+      {showSettings && (
+        <SettingsDialog
+          onSave={handleSaveShortcut}
+          onClose={() => setShowSettings(false)}
         />
       )}
     </div>
