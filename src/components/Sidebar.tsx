@@ -190,6 +190,25 @@ export default function Sidebar({ categories, selectedId, onSelect, onAdd, onRen
   return (
     <div style={{ padding: 8 }}>
       <div
+        data-category-id="_favorites"
+        onClick={() => onSelect('_favorites')}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 4,
+          padding: '6px 8px',
+          cursor: 'pointer',
+          borderRadius: 4,
+          background: selectedId === '_favorites' ? 'var(--bg-active)' : 'transparent',
+          color: selectedId === '_favorites' ? 'var(--accent)' : 'var(--text)',
+          fontWeight: selectedId === '_favorites' ? 600 : 400,
+          fontSize: 13,
+          marginBottom: 2,
+        }}
+      >
+        ⭐ 收藏夹
+      </div>
+      <div
         data-category-id="root"
         onClick={() => onSelect('root')}
         style={{

@@ -70,8 +70,9 @@ export default function App() {
 
   const loadItems = useCallback(async (catId: string, search: string) => {
     const result = await getItems({
-      categoryId: catId === 'root' ? undefined : catId,
+      categoryId: catId === 'root' || catId === '_favorites' ? undefined : catId,
       search: search || undefined,
+      favoriteOnly: catId === '_favorites' || undefined,
     });
     setItems(result);
   }, []);

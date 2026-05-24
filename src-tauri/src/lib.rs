@@ -281,12 +281,15 @@ fn get_items(
     state: tauri::State<AppState>,
     category_id: Option<String>,
     search: Option<String>,
+    favorite_only: Option<bool>,
     limit: Option<i32>,
     offset: Option<i32>,
 ) -> Result<Vec<serde_json::Value>, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let limit = limit.unwrap_or(50);
     let offset = offset.unwrap_or(0);
+    let fav_filter = favorite_only.unwrap_or(false);
+    let fav_where = if fav_filter { " AND i.is_favorite = 1" } else { "" };
 
     if let Some(query) = search {
         if !query.is_empty() {
@@ -303,16 +306,16 @@ fn get_items(
                     .collect::<Vec<_>>()
                     .join(" AND ");
 
-                if let Ok(mut stmt) = db.prepare("
+                if let Ok(mut stmt) = db.prepare(&format!("
                     SELECT i.id, i.title, i.type, i.content, i.preview, i.category_id,
                            i.is_favorite, i.usage_count, i.created_at, i.updated_at,
                            (i.image_data IS NOT NULL) as has_image_data, i.image_mime
                     FROM items i
                     JOIN items_fts fts ON i.rowid = fts.rowid
-                    WHERE items_fts MATCH ?1
+                    WHERE items_fts MATCH ?1 {}
                     ORDER BY i.sort_order ASC
                     LIMIT ?2 OFFSET ?3
-                ") {
+                ", fav_where)) {
                     if let Ok(rows) = stmt.query_map(rusqlite::params![fts_query, limit, offset], map_item) {
                         let items: Vec<_> = rows.collect();
                         if items.iter().any(|r| r.is_ok()) {
@@ -324,15 +327,15 @@ fn get_items(
 
             // Fallback: LIKE search across title, content, preview
             let like = format!("%{}%", query);
-            let mut stmt = db.prepare("
+            let mut stmt = db.prepare(&format!("
                 SELECT i.id, i.title, i.type, i.content, i.preview, i.category_id,
                        i.is_favorite, i.usage_count, i.created_at, i.updated_at,
                        (i.image_data IS NOT NULL) as has_image_data, i.image_mime
                 FROM items i
-                WHERE i.title LIKE ?1 OR i.content LIKE ?1 OR i.preview LIKE ?1
+                WHERE (i.title LIKE ?1 OR i.content LIKE ?1 OR i.preview LIKE ?1) {}
                 ORDER BY i.sort_order ASC
                 LIMIT ?2 OFFSET ?3
-            ").map_err(|e| e.to_string())?;
+            ", fav_where)).map_err(|e| e.to_string())?;
             let rows = stmt
                 .query_map(rusqlite::params![like, limit, offset], map_item)
                 .map_err(|e| e.to_string())?
@@ -341,7 +344,7 @@ fn get_items(
         }
     }
 
-    let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(cid) = category_id {
+    let (mut sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(cid) = category_id {
         if cid == "root" {
             ("SELECT i.id, i.title, i.type, i.content, i.preview, i.category_id, i.is_favorite, i.usage_count, i.created_at, i.updated_at, (i.image_data IS NOT NULL) as has_image_data, i.image_mime FROM items i ORDER BY i.sort_order ASC LIMIT ?1 OFFSET ?2".into(), vec![Box::new(limit), Box::new(offset)])
         } else {
@@ -359,6 +362,14 @@ fn get_items(
     } else {
         ("SELECT i.id, i.title, i.type, i.content, i.preview, i.category_id, i.is_favorite, i.usage_count, i.created_at, i.updated_at, (i.image_data IS NOT NULL) as has_image_data, i.image_mime FROM items i ORDER BY i.sort_order ASC LIMIT ?1 OFFSET ?2".into(), vec![Box::new(limit), Box::new(offset)])
     };
+
+    if fav_filter {
+        if sql.contains("WHERE") {
+            sql = sql.replace("ORDER BY", "AND i.is_favorite = 1 ORDER BY");
+        } else {
+            sql = sql.replace("ORDER BY", "WHERE i.is_favorite = 1 ORDER BY");
+        }
+    }
 
     let mut stmt = db.prepare(&sql).map_err(|e| e.to_string())?;
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| p.as_ref()).collect();

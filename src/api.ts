@@ -28,6 +28,7 @@ export async function deleteCategory(id: string): Promise<void> {
 export interface GetItemsParams {
   categoryId?: string;
   search?: string;
+  favoriteOnly?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -36,6 +37,7 @@ export async function getItems(params?: GetItemsParams): Promise<Item[]> {
   return invoke('get_items', {
     categoryId: params?.categoryId || null,
     search: params?.search || null,
+    favoriteOnly: params?.favoriteOnly || null,
     limit: params?.limit || 50,
     offset: params?.offset || 0,
   });
