@@ -28,10 +28,20 @@ export interface AppConfig {
     width: number;
     height: number;
   };
+  translation_history_max: number;
 }
 
 export interface Tag {
   id: string;
   name: string;
   color: string;
+}
+
+export interface TranslationHistory {
+  id: string;
+  source_text: string;
+  translated_text: string;
+  source_lang: string;
+  target_lang: string;
+  created_at: string;
 }

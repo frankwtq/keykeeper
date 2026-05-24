@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { AppConfig, Category, Item, Tag } from './types';
+import type { AppConfig, Category, Item, Tag, TranslationHistory } from './types';
 
 export async function getConfig(): Promise<AppConfig> {
   return invoke('get_config');
@@ -153,4 +153,25 @@ export async function reorderItems(items: { id: string; sort_order: number }[]):
 
 export async function moveItemCategory(id: string, categoryId: string | null): Promise<void> {
   return invoke('move_item_category', { id, categoryId });
+}
+
+export async function translateText(text: string): Promise<{ translatedText: string; detectedLang: string }> {
+  return invoke('translate_text', { text });
+}
+
+export async function addTranslationHistory(
+  sourceText: string,
+  translatedText: string,
+  sourceLang: string,
+  targetLang: string,
+): Promise<void> {
+  return invoke('add_translation_history', { sourceText, translatedText, sourceLang, targetLang });
+}
+
+export async function getTranslationHistory(limit?: number): Promise<TranslationHistory[]> {
+  return invoke('get_translation_history', { limit: limit || null });
+}
+
+export async function clearTranslationHistory(): Promise<void> {
+  return invoke('clear_translation_history');
 }

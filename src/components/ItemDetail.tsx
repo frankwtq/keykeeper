@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { open } from '@tauri-apps/plugin-shell';
-import { readImage, getImageData, getItemTags, getTags, addItemTag, removeItemTag, createTag } from '../api';
+import { readImage, getImageData, getItemTags, getTags, addItemTag, removeItemTag, createTag, translateText, addTranslationHistory } from '../api';
 import type { Item, Tag } from '../types';
 import { marked } from 'marked';
 
@@ -117,6 +117,7 @@ interface Props {
   onEdit: (item: Item) => void;
   onDelete: (id: string) => void;
   onToggleFavorite: (id: string) => void;
+  onOpenHistory: () => void;
 }
 
 function highlightText(text: string, query: string) {
@@ -129,7 +130,7 @@ function highlightText(text: string, query: string) {
   );
 }
 
-export default function ItemDetail({ item, highlight, onClose, onEdit, onDelete, onToggleFavorite }: Props) {
+export default function ItemDetail({ item, highlight, onClose, onEdit, onDelete, onToggleFavorite, onOpenHistory }: Props) {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [showImagePreview, setShowImagePreview] = useState(false);
   const [showTableFullscreen, setShowTableFullscreen] = useState(false);
@@ -189,6 +190,34 @@ export default function ItemDetail({ item, highlight, onClose, onEdit, onDelete,
       // fallback
     }
   }, []);
+
+  const [translation, setTranslation] = useState<string | null>(null);
+  const [translating, setTranslating] = useState(false);
+  const [showTranslation, setShowTranslation] = useState(false);
+
+  const handleTranslate = async () => {
+    if (showTranslation) {
+      setShowTranslation(false);
+      return;
+    }
+    if (translation) {
+      setShowTranslation(true);
+      return;
+    }
+    setTranslating(true);
+    try {
+      const result = await translateText(item.content);
+      setTranslation(result.translatedText);
+      setShowTranslation(true);
+      const dir = result.detectedLang.startsWith('zh') ? 'en' : 'zh-CN';
+      addTranslationHistory(item.content, result.translatedText, result.detectedLang, dir).catch(() => {});
+    } catch {
+      setTranslation('翻译失败');
+      setShowTranslation(true);
+    } finally {
+      setTranslating(false);
+    }
+  };
 
   const renderContent = () => {
     switch (item.type) {
@@ -255,6 +284,34 @@ export default function ItemDetail({ item, highlight, onClose, onEdit, onDelete,
                 onClick={() => copyToClipboard(item.content)}
               >📋 一键复制</button>
             </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+              <button
+                className="btn"
+                style={{ flex: 1, justifyContent: 'center', fontSize: 12 }}
+                onClick={handleTranslate}
+              >{translating ? '翻译中...' : showTranslation ? '收起翻译' : '🌐 翻译'}</button>
+              <button
+                className="btn"
+                style={{ flex: 1, justifyContent: 'center', fontSize: 12 }}
+                onClick={onOpenHistory}
+              >📜 翻译历史</button>
+            </div>
+            {showTranslation && translation && (
+              <div style={{
+                marginTop: 8,
+                padding: 12,
+                background: 'var(--bg)',
+                borderRadius: 'var(--radius)',
+                fontSize: 13,
+                color: 'var(--text-secondary)',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                maxHeight: 300,
+                overflow: 'auto',
+              }}>
+                {translation}
+              </div>
+            )}
           </div>
         );
       case 'image':

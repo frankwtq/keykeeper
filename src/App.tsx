@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { getConfig, getCategories, getItems, addCategory, deleteCategory, addItem, updateItem, deleteItem, incrementUsage, toggleFavorite, renameCategory, exportData, importData, setShortcut, reorderItems, moveItemCategory } from './api';
 import type { AppConfig, Category, Item } from './types';
 import Sidebar from './components/Sidebar';
@@ -8,6 +9,7 @@ import SearchBar from './components/SearchBar';
 import AddItemDialog from './components/AddItemDialog';
 import SettingsDialog from './components/SettingsDialog';
 import ConfirmDialog from './components/ConfirmDialog';
+import TranslationHistoryPanel from './components/TranslationHistoryPanel';
 import './App.css';
 
 const APP_VERSION = '0.4.0';
@@ -36,6 +38,7 @@ export default function App() {
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
   const [multiSelect, setMultiSelect] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showTranslationHistory, setShowTranslationHistory] = useState(false);
   // In-app keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -161,8 +164,12 @@ export default function App() {
     setShowAddDialog(true);
   };
 
-  const handleSaveShortcut = async (shortcut: string) => {
+  const handleSaveSettings = async (shortcut: string, translationHistoryMax: number) => {
     await setShortcut(shortcut);
+    const newConfig = { ...config!, global_shortcut: shortcut, translation_history_max: translationHistoryMax };
+    await invoke('set_config', { config: newConfig });
+    const freshConfig = await getConfig();
+    setConfig(freshConfig);
   };
 
   const handleExport = useCallback(async () => {
@@ -368,6 +375,7 @@ export default function App() {
               onEdit={handleEdit}
               onDelete={handleDeleteItem}
               onToggleFavorite={handleToggleFavorite}
+              onOpenHistory={() => setShowTranslationHistory(true)}
             />
           </aside>
         )}
@@ -380,9 +388,11 @@ export default function App() {
           onClose={() => { setShowAddDialog(false); setEditingItem(null); }}
         />
       )}
-      {showSettings && (
+      {showSettings && config && (
         <SettingsDialog
-          onSave={handleSaveShortcut}
+          shortcut={config.global_shortcut}
+          translationHistoryMax={config.translation_history_max}
+          onSave={handleSaveSettings}
           onClose={() => setShowSettings(false)}
         />
       )}
@@ -392,6 +402,9 @@ export default function App() {
           onConfirm={confirmDelete.onConfirm}
           onCancel={() => setConfirmDelete(null)}
         />
+      )}
+      {showTranslationHistory && (
+        <TranslationHistoryPanel onClose={() => setShowTranslationHistory(false)} />
       )}
     </div>
   );

@@ -8,6 +8,7 @@ pub struct AppConfig {
     pub global_shortcut: String,
     pub auto_start: bool,
     pub window: WindowConfig,
+    pub translation_history_max: i32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -26,6 +27,7 @@ impl Default for AppConfig {
                 width: 900.0,
                 height: 700.0,
             },
+            translation_history_max: 50,
         }
     }
 }

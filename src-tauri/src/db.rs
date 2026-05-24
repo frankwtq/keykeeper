@@ -54,6 +54,15 @@ pub fn init_db(conn: &Connection) -> Result<()> {
             tag_id  TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
             PRIMARY KEY (item_id, tag_id)
         );
+
+        CREATE TABLE IF NOT EXISTS translation_history (
+            id              TEXT PRIMARY KEY,
+            source_text     TEXT NOT NULL,
+            translated_text TEXT NOT NULL,
+            source_lang     TEXT NOT NULL DEFAULT 'auto',
+            target_lang     TEXT NOT NULL,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now','localtime'))
+        );
     ")?;
 
     // Migration: add image columns for existing databases

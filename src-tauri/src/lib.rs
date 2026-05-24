@@ -14,6 +14,7 @@ use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use base64::Engine as _;
 use serde::Serialize;
 use serde::Deserialize;
+use url::Url;
 
 #[derive(Serialize, Deserialize, Clone)]
 struct Tag {
@@ -26,6 +27,22 @@ struct Tag {
 struct UrlPreview {
     title: Option<String>,
     description: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+struct TranslationHistory {
+    id: String,
+    source_text: String,
+    translated_text: String,
+    source_lang: String,
+    target_lang: String,
+    created_at: String,
+}
+
+#[derive(Serialize)]
+struct TranslationResult {
+    translated_text: String,
+    detected_lang: String,
 }
 
 #[tauri::command]
@@ -108,6 +125,96 @@ async fn fetch_url_preview(url: String) -> Result<UrlPreview, String> {
     let description = extract_meta_description(&lower);
 
     Ok(UrlPreview { title, description })
+}
+
+#[tauri::command]
+async fn translate_text(text: String) -> Result<TranslationResult, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let params = [("client", "gtx"), ("sl", "auto"), ("tl", "en"), ("dt", "t"), ("q", &text)];
+    let url = Url::parse_with_params("https://translate.googleapis.com/translate_a/single", &params)
+        .map_err(|e| format!("URL 构建失败: {}", e))?;
+
+    let resp = client.get(url).send().await.map_err(|e| format!("翻译请求失败: {}", e))?;
+    let body = resp.text().await.map_err(|e| format!("翻译响应读取失败: {}", e))?;
+
+    let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|_| "翻译响应解析失败".to_string())?;
+    let detected_lang = parsed[2].as_str().unwrap_or("en").to_string();
+    let is_chinese = detected_lang == "zh" || detected_lang == "zh-CN" || detected_lang == "zh-TW";
+    let target_lang = if is_chinese { "en" } else { "zh-CN" };
+
+    let translated_text = if target_lang != "en" {
+        let params2 = [("client", "gtx"), ("sl", "auto"), ("tl", "zh-CN"), ("dt", "t"), ("q", &text)];
+        let url2 = Url::parse_with_params("https://translate.googleapis.com/translate_a/single", &params2)
+            .map_err(|e| format!("URL 构建失败: {}", e))?;
+        let resp2 = client.get(url2).send().await.map_err(|e| format!("翻译请求失败: {}", e))?;
+        let body2 = resp2.text().await.map_err(|e| format!("翻译响应读取失败: {}", e))?;
+        let parsed2: serde_json::Value = serde_json::from_str(&body2).map_err(|_| "翻译响应解析失败".to_string())?;
+        parsed2[0][0][0].as_str().unwrap_or("").to_string()
+    } else {
+        parsed[0][0][0].as_str().unwrap_or("").to_string()
+    };
+
+    Ok(TranslationResult { translated_text, detected_lang })
+}
+
+#[tauri::command]
+fn add_translation_history(
+    state: tauri::State<AppState>,
+    source_text: String,
+    translated_text: String,
+    source_lang: String,
+    target_lang: String,
+) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let id = uuid::Uuid::new_v4().to_string();
+    conn.execute(
+        "INSERT INTO translation_history (id, source_text, translated_text, source_lang, target_lang, created_at) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now','localtime'))",
+        rusqlite::params![id, source_text, translated_text, source_lang, target_lang],
+    ).map_err(|e| e.to_string())?;
+
+    let max = state.config.lock()
+        .map(|c| c.translation_history_max)
+        .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM translation_history WHERE id NOT IN (SELECT id FROM translation_history ORDER BY created_at DESC LIMIT ?1)",
+        rusqlite::params![max],
+    ).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_translation_history(
+    state: tauri::State<AppState>,
+    limit: Option<i32>,
+) -> Result<Vec<TranslationHistory>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let limit = limit.unwrap_or(50);
+    let mut stmt = conn.prepare(
+        "SELECT id, source_text, translated_text, source_lang, target_lang, created_at FROM translation_history ORDER BY created_at DESC LIMIT ?1"
+    ).map_err(|e| e.to_string())?;
+    let rows = stmt.query_map(rusqlite::params![limit], |row| {
+        Ok(TranslationHistory {
+            id: row.get(0)?,
+            source_text: row.get(1)?,
+            translated_text: row.get(2)?,
+            source_lang: row.get(3)?,
+            target_lang: row.get(4)?,
+            created_at: row.get(5)?,
+        })
+    }).map_err(|e| e.to_string())?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+#[tauri::command]
+fn clear_translation_history(state: tauri::State<AppState>) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM translation_history", []).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn extract_tag<'a>(lower: &'a str, tag: &str) -> Option<&'a str> {
@@ -837,6 +944,10 @@ pub fn run() {
             add_item_tag,
             remove_item_tag,
             get_item_tags,
+            translate_text,
+            add_translation_history,
+            get_translation_history,
+            clear_translation_history,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

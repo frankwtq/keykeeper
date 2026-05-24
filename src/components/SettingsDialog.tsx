@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { getConfig } from '../api';
 
 interface Props {
-  onSave: (shortcut: string) => Promise<void>;
+  shortcut: string;
+  translationHistoryMax: number;
+  onSave: (shortcut: string, translationHistoryMax: number) => Promise<void>;
   onClose: () => void;
 }
 
@@ -28,15 +29,12 @@ function displayShortcut(s: string): string {
     .replace('Space', '␣');
 }
 
-export default function SettingsDialog({ onSave, onClose }: Props) {
-  const [shortcut, setShortcut] = useState('');
+export default function SettingsDialog({ shortcut: initialShortcut, translationHistoryMax: initialMax, onSave, onClose }: Props) {
+  const [shortcut, setShortcut] = useState(initialShortcut);
+  const [translationHistoryMax, setTranslationHistoryMax] = useState(initialMax);
   const [recording, setRecording] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-
-  useEffect(() => {
-    getConfig().then(c => setShortcut(c.global_shortcut));
-  }, []);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (!recording) return;
@@ -60,7 +58,12 @@ export default function SettingsDialog({ onSave, onClose }: Props) {
     setSaving(true);
     setError('');
     try {
-      await onSave(shortcut);
+      if (translationHistoryMax < 0) {
+        setError('保留条数不能为负数');
+        setSaving(false);
+        return;
+      }
+      await onSave(shortcut, translationHistoryMax);
       onClose();
     } catch (e) {
       setError(String(e));
@@ -146,6 +149,31 @@ export default function SettingsDialog({ onSave, onClose }: Props) {
               }}
             >恢复默认</button>
           </div>
+        </div>
+
+        <div>
+          <label style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 6, display: 'block' }}>
+            翻译历史保留条数
+          </label>
+          <input
+            type="number"
+            min={0}
+            max={999}
+            value={translationHistoryMax}
+            onChange={e => setTranslationHistoryMax(Number(e.target.value))}
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              border: '1px solid var(--border)',
+              borderRadius: 'var(--radius)',
+              background: 'var(--bg)',
+              color: 'var(--text)',
+              fontSize: 14,
+              outline: 'none',
+              boxSizing: 'border-box',
+            }}
+          />
+          <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-secondary)' }}>默认为 50，设为 0 则不保留</div>
         </div>
 
         {error && (
