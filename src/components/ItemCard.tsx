@@ -10,16 +10,31 @@ const TYPE_ICONS: Record<string, string> = {
 interface Props {
   item: Item;
   isSelected: boolean;
-  onClick: () => void;
+  highlight?: string;
+  multiSelect?: boolean;
+  checked?: boolean;
+  onCheckChange?: (checked: boolean) => void;
+  onClick?: () => void;
   onToggleFavorite: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }
 
-export default function ItemCard({ item, isSelected, onClick, onToggleFavorite, onEdit, onDelete }: Props) {
+function highlightText(text: string, query: string) {
+  if (!query) return text;
+  const parts = text.split(new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
+  return parts.map((part, i) =>
+    part.toLowerCase() === query.toLowerCase()
+      ? <mark key={i} style={{ background: 'var(--accent-light)', color: 'var(--text)', borderRadius: 2, padding: '0 2px' }}>{part}</mark>
+      : part
+  );
+}
+
+export default function ItemCard({ item, isSelected, highlight, multiSelect, checked, onCheckChange, onClick, onToggleFavorite, onEdit, onDelete }: Props) {
   return (
     <div
-      onClick={onClick}
+      data-item-id={item.id}
+      onClick={multiSelect ? (e) => { e.stopPropagation(); onCheckChange?.(!checked); } : onClick}
       style={{
         display: 'flex',
         alignItems: 'flex-start',
@@ -30,8 +45,23 @@ export default function ItemCard({ item, isSelected, onClick, onToggleFavorite, 
         borderRadius: 'var(--radius)',
         cursor: 'pointer',
         transition: 'all 0.15s',
+        touchAction: 'none',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
       }}
     >
+      <input
+        type="checkbox"
+        checked={checked || false}
+        onChange={() => onCheckChange?.(!checked)}
+        onClick={e => e.stopPropagation()}
+        style={{
+          display: multiSelect ? 'block' : 'none',
+          margin: '1px 0 0 0',
+          accentColor: 'var(--accent)',
+          flexShrink: 0,
+        }}
+      />
       <span style={{ fontSize: 18, flexShrink: 0, marginTop: 1 }}>
         {TYPE_ICONS[item.type] || '📄'}
       </span>
@@ -44,7 +74,7 @@ export default function ItemCard({ item, isSelected, onClick, onToggleFavorite, 
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
         }}>
-          {item.title || '(无标题)'}
+          {highlightText(item.title || '(无标题)', highlight || '')}
         </div>
         <div style={{
           fontSize: 12,
@@ -53,7 +83,7 @@ export default function ItemCard({ item, isSelected, onClick, onToggleFavorite, 
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
         }}>
-          {item.preview || item.content?.slice(0, 80) || ''}
+          {highlightText(item.preview || item.content?.slice(0, 80) || '', highlight || '')}
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 4, fontSize: 11, color: 'var(--text-secondary)' }}>
           <span>使用 {item.usage_count} 次</span>

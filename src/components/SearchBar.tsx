@@ -25,7 +25,7 @@ export default function SearchBar({ value, onChange }: Props) {
       }}>🔍</span>
       <input
         type="text"
-        placeholder="搜索..."
+        placeholder="⌘F 搜索..."
         value={value}
         onChange={e => onChange(e.target.value)}
         onFocus={() => setFocused(true)}

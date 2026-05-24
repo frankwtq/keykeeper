@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import type { Category, Item } from '../types';
-import { saveImageFile } from '../api';
+import { saveImageFile, fetchUrlPreview } from '../api';
 
 const MAX_PASTE_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
 
@@ -21,6 +21,8 @@ export default function AddItemDialog({ categories, editItem, onSave, onClose }:
   const [imageData, setImageData] = useState<string | null>(null);
   const [imageMime, setImageMime] = useState<string | null>(null);
   const [pasteWarning, setPasteWarning] = useState<string | null>(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+  const [pasteBlob, setPasteBlob] = useState<Blob | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -38,6 +40,21 @@ export default function AddItemDialog({ categories, editItem, onSave, onClose }:
     inputRef.current?.focus();
   }, [editItem]);
 
+  const handleFetchUrl = async () => {
+    const url = content.trim();
+    if (!url || !url.startsWith('http')) return;
+    setLoadingPreview(true);
+    try {
+      const result = await fetchUrlPreview(url);
+      if (result.title && !title) setTitle(result.title);
+      if (result.description && !preview) setPreview(result.description);
+    } catch {
+      // fetch failed silently
+    } finally {
+      setLoadingPreview(false);
+    }
+  };
+
   const handlePasteImage = async () => {
     try {
       const items = await navigator.clipboard.read();
@@ -45,27 +62,59 @@ export default function AddItemDialog({ categories, editItem, onSave, onClose }:
         for (const type of item.types) {
           if (type.startsWith('image/')) {
             const blob = await item.getType(type);
+            setPasteBlob(blob);
             if (blob.size > MAX_PASTE_IMAGE_SIZE) {
-              setPasteWarning(`图片较大 (${(blob.size / 1024 / 1024).toFixed(1)}MB)，建议使用文件路径引用。仍然继续？`);
+              setPasteWarning(`图片较大 (${(blob.size / 1024 / 1024).toFixed(1)}MB)，建议压缩或使用文件路径。`);
               return;
             }
-            setPasteWarning(null);
-            const reader = new FileReader();
-            reader.onload = () => {
-              const result = reader.result as string;
-              const b64 = result.split(',')[1];
-              setImageData(b64);
-              setImageMime(type);
-              setTitle(title || `截图 ${new Date().toLocaleTimeString()}`);
-              setContent('粘贴图片');
-            };
-            reader.readAsDataURL(blob);
+            readBlobAsB64(blob, type);
             return;
           }
         }
       }
     } catch {
       // clipboard read not supported or denied
+    }
+  };
+
+  const readBlobAsB64 = (blob: Blob, mime: string) => {
+    setPasteWarning(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const b64 = result.split(',')[1];
+      setImageData(b64);
+      setImageMime(mime);
+      setTitle(title || `截图 ${new Date().toLocaleTimeString()}`);
+      setContent('粘贴图片');
+    };
+    reader.readAsDataURL(blob);
+  };
+
+  const compressImage = async (blob: Blob): Promise<Blob> => {
+    const img = await createImageBitmap(blob);
+    const maxDim = 1920;
+    let { width, height } = img;
+    if (width > maxDim || height > maxDim) {
+      if (width > height) { height = Math.round(height * maxDim / width); width = maxDim; }
+      else { width = Math.round(width * maxDim / height); height = maxDim; }
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(img, 0, 0, width, height);
+    img.close();
+    return new Promise(resolve => canvas.toBlob(b => resolve(b!), 'image/jpeg', 0.8));
+  };
+
+  const handleCompressAndSave = async () => {
+    if (!pasteBlob) return;
+    try {
+      const compressed = await compressImage(pasteBlob);
+      readBlobAsB64(compressed, 'image/jpeg');
+    } catch {
+      setPasteWarning('压缩失败');
     }
   };
 
@@ -227,8 +276,10 @@ export default function AddItemDialog({ categories, editItem, onSave, onClose }:
                 <button className="btn" onClick={handlePasteImage}>📋 粘贴</button>
               </div>
               {pasteWarning && (
-                <div style={{ fontSize: 12, color: '#e67e22', marginTop: 4 }}>
-                  {pasteWarning}
+                <div style={{ fontSize: 12, color: '#e67e22', marginTop: 4, display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <span>{pasteWarning}</span>
+                  <button className="btn" style={{ fontSize: 11, padding: '1px 6px' }} onClick={() => pasteBlob && readBlobAsB64(pasteBlob, pasteBlob.type)}>继续使用</button>
+                  <button className="btn btn-primary" style={{ fontSize: 11, padding: '1px 6px' }} onClick={handleCompressAndSave}>压缩保存</button>
                 </div>
               )}
               {imageData && (
@@ -268,21 +319,26 @@ export default function AddItemDialog({ categories, editItem, onSave, onClose }:
               }}
             />
           ) : (
-            <input
-              value={content}
-              onChange={e => setContent(e.target.value)}
-              placeholder="https://..."
-              style={{
-                width: '100%',
-                padding: '8px 10px',
-                border: '1px solid var(--border)',
-                borderRadius: 'var(--radius)',
-                background: 'var(--bg)',
-                color: 'var(--text)',
-                outline: 'none',
-                fontSize: 13,
-              }}
-            />
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                value={content}
+                onChange={e => setContent(e.target.value)}
+                placeholder="https://..."
+                style={{
+                  flex: 1,
+                  padding: '8px 10px',
+                  border: '1px solid var(--border)',
+                  borderRadius: 'var(--radius)',
+                  background: 'var(--bg)',
+                  color: 'var(--text)',
+                  outline: 'none',
+                  fontSize: 13,
+                }}
+              />
+              <button className="btn" onClick={handleFetchUrl} disabled={loadingPreview}>
+                {loadingPreview ? '⏳' : '🔍 抓取'}
+              </button>
+            </div>
           )}
         </div>
 

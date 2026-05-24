@@ -42,6 +42,18 @@ pub fn init_db(conn: &Connection) -> Result<()> {
 
         INSERT OR IGNORE INTO categories (id, name, parent_id, sort_order, created_at)
         VALUES ('root', '全部', NULL, 0, datetime('now'));
+
+        CREATE TABLE IF NOT EXISTS tags (
+            id      TEXT PRIMARY KEY,
+            name    TEXT NOT NULL UNIQUE,
+            color   TEXT NOT NULL DEFAULT '#4361ee'
+        );
+
+        CREATE TABLE IF NOT EXISTS item_tags (
+            item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+            tag_id  TEXT NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+            PRIMARY KEY (item_id, tag_id)
+        );
     ")?;
 
     // Migration: add image columns for existing databases
@@ -71,6 +83,19 @@ pub fn init_db(conn: &Connection) -> Result<()> {
                 content_rowid='rowid',
                 tokenize='unicode61'
             );
+        ")?;
+    }
+
+    // Migration: add sort_order column
+    let has_sort_order: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('items') WHERE name='sort_order'",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_sort_order {
+        conn.execute_batch("
+            ALTER TABLE items ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0;
+            UPDATE items SET sort_order = COALESCE(CAST(strftime('%s', created_at) AS INTEGER), CAST(strftime('%s', 'now') AS INTEGER));
         ")?;
     }
     Ok(())

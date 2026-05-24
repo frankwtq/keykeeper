@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback } from 'react';
-import { getConfig, getCategories, getItems, addCategory, deleteCategory, addItem, updateItem, deleteItem, incrementUsage, toggleFavorite, renameCategory, exportData, importData, setShortcut } from './api';
+import { useEffect, useState, useCallback, useMemo } from 'react';
+import { getConfig, getCategories, getItems, addCategory, deleteCategory, addItem, updateItem, deleteItem, incrementUsage, toggleFavorite, renameCategory, exportData, importData, setShortcut, reorderItems, moveItemCategory } from './api';
 import type { AppConfig, Category, Item } from './types';
 import Sidebar from './components/Sidebar';
 import ItemList from './components/ItemList';
@@ -7,9 +7,19 @@ import ItemDetail from './components/ItemDetail';
 import SearchBar from './components/SearchBar';
 import AddItemDialog from './components/AddItemDialog';
 import SettingsDialog from './components/SettingsDialog';
+import ConfirmDialog from './components/ConfirmDialog';
 import './App.css';
 
-const APP_VERSION = '0.3.3';
+const APP_VERSION = '0.4.0';
+
+type SortField = 'usage_count' | 'created_at' | 'updated_at' | 'sort_order';
+
+const SORT_OPTIONS: { value: SortField; label: string }[] = [
+  { value: 'sort_order', label: '自定义' },
+  { value: 'usage_count', label: '使用次数' },
+  { value: 'created_at', label: '创建时间' },
+  { value: 'updated_at', label: '最近更新' },
+];
 
 export default function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -21,6 +31,11 @@ export default function App() {
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [editingItem, setEditingItem] = useState<Item | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState<{ message: string; onConfirm: () => Promise<void> } | null>(null);
+  const [sortField, setSortField] = useState<SortField>('usage_count');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+  const [multiSelect, setMultiSelect] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // In-app keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -53,31 +68,35 @@ export default function App() {
     setCategories(cats);
   };
 
-  const loadItems = async () => {
+  const loadItems = useCallback(async (catId: string, search: string) => {
     const result = await getItems({
-      categoryId: selectedCategory === 'root' ? undefined : selectedCategory,
-      search: searchQuery || undefined,
+      categoryId: catId === 'root' ? undefined : catId,
+      search: search || undefined,
     });
     setItems(result);
+  }, []);
+
+  useEffect(() => {
+    getConfig().then(setConfig);
+    loadCategories();
+    loadItems('root', '');
+  }, [loadItems]);
+
+  const handleSearch = (query: string) => {
+    setSearchQuery(query);
+    loadItems(selectedCategory, query);
+  };
+
+  const handleCategorySelect = (id: string) => {
+    setSelectedCategory(id);
+    setSearchQuery('');
+    loadItems(id, '');
   };
 
   useEffect(() => {
     getConfig().then(setConfig);
     loadCategories();
   }, []);
-
-  useEffect(() => {
-    loadItems();
-  }, [selectedCategory]);
-
-  useEffect(() => {
-    if (searchQuery) loadItems();
-  }, [searchQuery]);
-
-  const handleSearch = (query: string) => {
-    setSearchQuery(query);
-    if (!query) loadItems();
-  };
 
   const handleAddCategory = async (name: string, parentId?: string) => {
     await addCategory(name, parentId);
@@ -90,8 +109,14 @@ export default function App() {
   };
 
   const handleDeleteCategory = async (id: string) => {
-    await deleteCategory(id);
-    await loadCategories();
+    setConfirmDelete({
+      message: '确定删除这个分类吗？分类下的内容不会被删除。',
+      onConfirm: async () => {
+        await deleteCategory(id);
+        await loadCategories();
+        setConfirmDelete(null);
+      },
+    });
   };
 
   const handleSaveItem = async (item: { title: string; type: string; content: string; preview: string; categoryId?: string; imageData?: string | null; imageMime?: string | null }) => {
@@ -102,13 +127,19 @@ export default function App() {
       await addItem(item);
     }
     setShowAddDialog(false);
-    await loadItems();
+    await loadItems(selectedCategory, searchQuery);
   };
 
   const handleDeleteItem = async (id: string) => {
-    await deleteItem(id);
-    setSelectedItem(null);
-    await loadItems();
+    setConfirmDelete({
+      message: '确定删除这条内容吗？删除后不可恢复。',
+      onConfirm: async () => {
+        await deleteItem(id);
+        setSelectedItem(null);
+        await loadItems(selectedCategory, searchQuery);
+        setConfirmDelete(null);
+      },
+    });
   };
 
   const handleItemClick = async (item: Item) => {
@@ -158,13 +189,74 @@ export default function App() {
       if (path) {
         await importData(path as string);
         await loadCategories();
-        await loadItems();
+        await loadItems(selectedCategory, searchQuery);
         setSelectedItem(null);
       }
     } catch (e) {
       console.error('导入失败:', e);
     }
   }, []);
+
+  const sortedItems = useMemo(() => {
+    if (sortField === 'sort_order') return items;
+    const dir = sortOrder === 'desc' ? -1 : 1;
+    return [...items].sort((a, b) => {
+      if (sortField === 'usage_count') {
+        return ((b.usage_count || 0) - (a.usage_count || 0)) * dir;
+      }
+      return (new Date(b[sortField]).getTime() - new Date(a[sortField]).getTime()) * dir;
+    });
+  }, [items, sortField, sortOrder]);
+
+  const handleSortFieldChange = (field: SortField) => {
+    if (field === sortField) {
+      setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc');
+    } else {
+      setSortField(field);
+      setSortOrder('desc');
+    }
+  };
+
+  const handleReorder = async (reordered: { id: string; sort_order: number }[]) => {
+    setSortField('sort_order');
+    await reorderItems(reordered);
+    await loadItems(selectedCategory, searchQuery);
+  };
+
+  const handleMoveToCategory = async (itemId: string, categoryId: string) => {
+    await moveItemCategory(itemId, categoryId === 'root' ? null : categoryId);
+    await loadItems(selectedCategory, searchQuery);
+  };
+
+  const handleToggleMultiSelect = () => {
+    setMultiSelect(!multiSelect);
+    setSelectedIds(new Set());
+  };
+
+  const handleBatchDelete = async () => {
+    setConfirmDelete({
+      message: `确定删除选中的 ${selectedIds.size} 条内容吗？`,
+      onConfirm: async () => {
+        for (const id of selectedIds) {
+          await deleteItem(id);
+        }
+        setSelectedItem(null);
+        setSelectedIds(new Set());
+        setMultiSelect(false);
+        await loadItems(selectedCategory, searchQuery);
+        setConfirmDelete(null);
+      },
+    });
+  };
+
+  const handleBatchMove = async (categoryId: string) => {
+    for (const id of selectedIds) {
+      await moveItemCategory(id, categoryId === 'root' ? null : categoryId);
+    }
+    setSelectedIds(new Set());
+    setMultiSelect(false);
+    await loadItems(selectedCategory, searchQuery);
+  };
 
   if (!config) return null;
 
@@ -174,42 +266,103 @@ export default function App() {
         <div className="header-left">
           <h1 className="app-title">KeyKeeper <span style={{ fontSize: 11, fontWeight: 400, color: 'var(--text-secondary)' }}>v{APP_VERSION}</span></h1>
         </div>
-        <div className="header-center">
+        <div className="header-center" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <SearchBar value={searchQuery} onChange={handleSearch} />
+          <div style={{ position: 'relative' }}>
+            <select
+              value={sortField}
+              onChange={e => handleSortFieldChange(e.target.value as SortField)}
+              style={{
+                fontSize: 12,
+                padding: '4px 6px',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius)',
+                background: 'var(--bg-card)',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+              }}
+            >
+              {SORT_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+            <button
+              onClick={() => setSortOrder(prev => prev === 'desc' ? 'asc' : 'desc')}
+              title={sortOrder === 'desc' ? '降序' : '升序'}
+              style={{
+                fontSize: 12,
+                padding: '4px 6px',
+                border: '1px solid var(--border)',
+                borderRadius: 'var(--radius)',
+                background: 'var(--bg-card)',
+                color: 'var(--text-secondary)',
+                cursor: 'pointer',
+                lineHeight: 1,
+              }}
+            >{sortOrder === 'desc' ? '↓' : '↑'}</button>
+          </div>
         </div>
         <div className="header-right" style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-          <button className="btn btn-sm" onClick={handleExport}>📦 导出</button>
-          <button className="btn btn-sm" onClick={handleImport}>📂 导入</button>
-          <button className="btn btn-sm" onClick={() => setShowSettings(true)}>⚙ 设置</button>
-          <button className="btn btn-primary" onClick={() => { setEditingItem(null); setShowAddDialog(true); }}>+ 新增</button>
+          <button
+            className={`btn btn-sm ${multiSelect ? 'btn-primary' : ''}`}
+            onClick={handleToggleMultiSelect}
+            title="多选"
+          >☑</button>
+          <button className="btn btn-sm" onClick={handleExport} title="📦 导出">📦</button>
+          <button className="btn btn-sm" onClick={handleImport} title="📂 导入">📂</button>
+          <button className="btn btn-sm" onClick={() => setShowSettings(true)} title="⚙ 设置">⚙</button>
+          <button className="btn btn-primary" onClick={() => { setEditingItem(null); setShowAddDialog(true); }} title="⌘N 新增">+ 新增</button>
         </div>
       </header>
+      {multiSelect && selectedIds.size > 0 && (
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          padding: '6px 16px',
+          background: 'var(--accent-light)',
+          borderBottom: '1px solid var(--border)',
+          fontSize: 13,
+        }}>
+          <span>已选 {selectedIds.size} 项</span>
+          <button className="btn btn-sm btn-danger" onClick={handleBatchDelete}>删除</button>
+          <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>拖拽到侧栏分类可批量移动</span>
+        </div>
+      )}
       <div className="app-body">
         <aside className="app-sidebar">
           <Sidebar
             categories={categories}
             selectedId={selectedCategory}
-            onSelect={setSelectedCategory}
+            onSelect={handleCategorySelect}
             onAdd={handleAddCategory}
             onRename={handleRenameCategory}
             onDelete={handleDeleteCategory}
             maxDepth={config.max_category_depth}
+            onMoveItem={multiSelect ? (_itemId, categoryId) => handleBatchMove(categoryId) : handleMoveToCategory}
           />
         </aside>
         <main className="app-main">
           <ItemList
-            items={items}
+            items={sortedItems}
             selectedId={selectedItem?.id || null}
+            highlight={searchQuery}
+            multiSelect={multiSelect}
+            selectedIds={selectedIds}
+            onSelectionChange={setSelectedIds}
             onItemClick={handleItemClick}
             onToggleFavorite={handleToggleFavorite}
             onDelete={handleDeleteItem}
             onEdit={handleEdit}
+            onReorder={handleReorder}
+            onMoveItem={multiSelect ? (_itemId, categoryId) => handleBatchMove(categoryId) : handleMoveToCategory}
           />
         </main>
         {selectedItem && (
           <aside className="app-detail">
             <ItemDetail
               item={selectedItem}
+              highlight={searchQuery}
               onClose={() => setSelectedItem(null)}
               onEdit={handleEdit}
               onDelete={handleDeleteItem}
@@ -230,6 +383,13 @@ export default function App() {
         <SettingsDialog
           onSave={handleSaveShortcut}
           onClose={() => setShowSettings(false)}
+        />
+      )}
+      {confirmDelete && (
+        <ConfirmDialog
+          message={confirmDelete.message}
+          onConfirm={confirmDelete.onConfirm}
+          onCancel={() => setConfirmDelete(null)}
         />
       )}
     </div>

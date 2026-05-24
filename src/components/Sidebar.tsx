@@ -9,6 +9,7 @@ interface Props {
   onRename: (id: string, name: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   maxDepth: number;
+  onMoveItem?: (itemId: string, categoryId: string) => Promise<void>;
 }
 
 function buildTree(cats: Category[], parentId: string | null): Category[] {
@@ -17,7 +18,7 @@ function buildTree(cats: Category[], parentId: string | null): Category[] {
     .sort((a, b) => a.sort_order - b.sort_order);
 }
 
-function TreeNode({ cat, allCats, depth, selectedId, onSelect, onAdd, onRename, onDelete, maxDepth }: {
+function TreeNode({ cat, allCats, depth, selectedId, onSelect, onAdd, onRename, onDelete, maxDepth, onMoveItem }: {
   cat: Category;
   allCats: Category[];
   depth: number;
@@ -27,6 +28,7 @@ function TreeNode({ cat, allCats, depth, selectedId, onSelect, onAdd, onRename, 
   onRename: (id: string, name: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
   maxDepth: number;
+  onMoveItem?: (itemId: string, categoryId: string) => Promise<void>;
 }) {
   const [expanded, setExpanded] = useState(true);
   const [adding, setAdding] = useState(false);
@@ -80,6 +82,7 @@ function TreeNode({ cat, allCats, depth, selectedId, onSelect, onAdd, onRename, 
   return (
     <div>
       <div
+        data-category-id={cat.id}
         onClick={() => onSelect(cat.id)}
         style={{
           display: 'flex',
@@ -140,6 +143,7 @@ function TreeNode({ cat, allCats, depth, selectedId, onSelect, onAdd, onRename, 
               onRename={onRename}
               onDelete={onDelete}
               maxDepth={maxDepth}
+              onMoveItem={onMoveItem}
             />
           ))}
         </div>
@@ -170,7 +174,7 @@ function TreeNode({ cat, allCats, depth, selectedId, onSelect, onAdd, onRename, 
   );
 }
 
-export default function Sidebar({ categories, selectedId, onSelect, onAdd, onRename, onDelete, maxDepth }: Props) {
+export default function Sidebar({ categories, selectedId, onSelect, onAdd, onRename, onDelete, maxDepth, onMoveItem }: Props) {
   const [addingRoot, setAddingRoot] = useState(false);
   const [newRootName, setNewRootName] = useState('');
   const rootCats = buildTree(categories, null).filter(c => c.id !== 'root');
@@ -186,6 +190,7 @@ export default function Sidebar({ categories, selectedId, onSelect, onAdd, onRen
   return (
     <div style={{ padding: 8 }}>
       <div
+        data-category-id="root"
         onClick={() => onSelect('root')}
         style={{
           display: 'flex',
@@ -215,6 +220,7 @@ export default function Sidebar({ categories, selectedId, onSelect, onAdd, onRen
           onRename={onRename}
           onDelete={onDelete}
           maxDepth={maxDepth}
+          onMoveItem={onMoveItem}
         />
       ))}
       <div style={{ padding: '8px 0' }}>

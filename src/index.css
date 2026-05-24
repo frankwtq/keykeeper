@@ -67,3 +67,13 @@ input, textarea, select {
   background: var(--border);
   border-radius: 3px;
 }
+
+.markdown-body p { margin-bottom: 8px; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3 { margin: 14px 0 6px; font-weight: 600; }
+.markdown-body ul, .markdown-body ol { padding-left: 20px; margin-bottom: 8px; }
+.markdown-body code { background: var(--bg-hover); padding: 2px 5px; border-radius: 3px; font-size: 0.9em; }
+.markdown-body pre { background: var(--bg-hover); padding: 12px; border-radius: var(--radius); overflow-x: auto; margin-bottom: 8px; }
+.markdown-body pre code { background: none; padding: 0; }
+.markdown-body blockquote { border-left: 3px solid var(--accent); padding-left: 12px; color: var(--text-secondary); margin-bottom: 8px; }
+.markdown-body a { color: var(--accent); }
+.markdown-body img { max-width: 100%; border-radius: var(--radius); }

@@ -12,6 +12,123 @@ use tauri::{
 };
 use tauri_plugin_global_shortcut::GlobalShortcutExt;
 use base64::Engine as _;
+use serde::Serialize;
+use serde::Deserialize;
+
+#[derive(Serialize, Deserialize, Clone)]
+struct Tag {
+    id: String,
+    name: String,
+    color: String,
+}
+
+#[derive(Serialize)]
+struct UrlPreview {
+    title: Option<String>,
+    description: Option<String>,
+}
+
+#[tauri::command]
+fn get_tags(state: tauri::State<AppState>) -> Result<Vec<Tag>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare("SELECT id, name, color FROM tags ORDER BY name").map_err(|e| e.to_string())?;
+    let tags = stmt.query_map([], |row| {
+        Ok(Tag {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            color: row.get(2)?,
+        })
+    }).map_err(|e| e.to_string())?
+    .filter_map(|r| r.ok())
+    .collect();
+    Ok(tags)
+}
+
+#[tauri::command]
+fn create_tag(state: tauri::State<AppState>, name: String, color: String) -> Result<Tag, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let id = uuid::Uuid::new_v4().to_string();
+    conn.execute("INSERT INTO tags (id, name, color) VALUES (?1, ?2, ?3)", rusqlite::params![id, name, color]).map_err(|e| e.to_string())?;
+    Ok(Tag { id, name, color })
+}
+
+#[tauri::command]
+fn delete_tag(state: tauri::State<AppState>, id: String) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM tags WHERE id = ?1", rusqlite::params![id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn add_item_tag(state: tauri::State<AppState>, item_id: String, tag_id: String) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute("INSERT OR IGNORE INTO item_tags (item_id, tag_id) VALUES (?1, ?2)", rusqlite::params![item_id, tag_id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn remove_item_tag(state: tauri::State<AppState>, item_id: String, tag_id: String) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM item_tags WHERE item_id = ?1 AND tag_id = ?2", rusqlite::params![item_id, tag_id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_item_tags(state: tauri::State<AppState>, item_id: String) -> Result<Vec<Tag>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.name, t.color FROM tags t INNER JOIN item_tags it ON t.id = it.tag_id WHERE it.item_id = ?1 ORDER BY t.name"
+    ).map_err(|e| e.to_string())?;
+    let tags = stmt.query_map(rusqlite::params![item_id], |row| {
+        Ok(Tag {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            color: row.get(2)?,
+        })
+    }).map_err(|e| e.to_string())?
+    .filter_map(|r| r.ok())
+    .collect();
+    Ok(tags)
+}
+
+#[tauri::command]
+async fn fetch_url_preview(url: String) -> Result<UrlPreview, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent("Mozilla/5.0 (compatible; KeyKeeper/1.0)")
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client.get(&url).send().await.map_err(|e| e.to_string())?;
+    let html = resp.text().await.map_err(|e| e.to_string())?;
+    let lower = html.to_lowercase();
+
+    let title = extract_tag(&lower, "title").map(|s| s.trim().to_string());
+    let description = extract_meta_description(&lower);
+
+    Ok(UrlPreview { title, description })
+}
+
+fn extract_tag<'a>(lower: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{}>", tag);
+    let close = format!("</{}>", tag);
+    let start = lower.find(&open)?;
+    let content_start = start + open.len();
+    let end = lower[content_start..].find(&close)?;
+    Some(&lower[content_start..content_start + end])
+}
+
+fn extract_meta_description(lower: &str) -> Option<String> {
+    // Look for <meta name="description" content="...">
+    let needle = r#"<meta name="description""#;
+    let start = lower.find(needle)?;
+    let rest = &lower[start + needle.len()..];
+    let content_start = rest.find(r#"content=""#)?;
+    let value_start = content_start + r#"content=""#.len();
+    let end = rest[value_start..].find('"')?;
+    Some(rest[value_start..value_start + end].to_string())
+}
 
 struct AppState {
     db: Mutex<Connection>,
@@ -137,6 +254,29 @@ fn rename_category(state: tauri::State<AppState>, id: String, name: String) -> R
 }
 
 #[tauri::command]
+fn reorder_items(state: tauri::State<AppState>, items: Vec<serde_json::Value>) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    for item in &items {
+        let id = item["id"].as_str().ok_or("missing id")?;
+        let sort_order = item["sort_order"].as_i64().ok_or("missing sort_order")?;
+        db.execute("UPDATE items SET sort_order=?1 WHERE id=?2", rusqlite::params![sort_order, id])
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn move_item_category(state: tauri::State<AppState>, id: String, category_id: Option<String>) -> Result<(), String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    db.execute(
+        "UPDATE items SET category_id=?1, updated_at=?2 WHERE id=?3",
+        rusqlite::params![category_id, now, id],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
 fn get_items(
     state: tauri::State<AppState>,
     category_id: Option<String>,
@@ -150,20 +290,51 @@ fn get_items(
 
     if let Some(query) = search {
         if !query.is_empty() {
-            let mut stmt = db
-                .prepare("
+            // Clean query for FTS5: strip chars that confuse column-name parsing (like ://)
+            let cleaned: String = query.chars()
+                .map(|c| if c.is_alphanumeric() || c.is_whitespace() { c } else { ' ' })
+                .collect();
+            let words: Vec<&str> = cleaned.split_whitespace().filter(|w| !w.is_empty()).collect();
+
+            // Try FTS5 with prefix matching, fall back to LIKE if FTS5 fails (e.g., stop words)
+            if !words.is_empty() {
+                let fts_query = words.iter()
+                    .map(|w| format!("{}*", w))
+                    .collect::<Vec<_>>()
+                    .join(" AND ");
+
+                if let Ok(mut stmt) = db.prepare("
                     SELECT i.id, i.title, i.type, i.content, i.preview, i.category_id,
                            i.is_favorite, i.usage_count, i.created_at, i.updated_at,
                            (i.image_data IS NOT NULL) as has_image_data, i.image_mime
                     FROM items i
                     JOIN items_fts fts ON i.rowid = fts.rowid
                     WHERE items_fts MATCH ?1
-                    ORDER BY i.usage_count DESC
+                    ORDER BY i.sort_order ASC
                     LIMIT ?2 OFFSET ?3
-                ")
-                .map_err(|e| e.to_string())?;
+                ") {
+                    if let Ok(rows) = stmt.query_map(rusqlite::params![fts_query, limit, offset], map_item) {
+                        let items: Vec<_> = rows.collect();
+                        if items.iter().any(|r| r.is_ok()) {
+                            return collect_items(items);
+                        }
+                    }
+                }
+            }
+
+            // Fallback: LIKE search across title, content, preview
+            let like = format!("%{}%", query);
+            let mut stmt = db.prepare("
+                SELECT i.id, i.title, i.type, i.content, i.preview, i.category_id,
+                       i.is_favorite, i.usage_count, i.created_at, i.updated_at,
+                       (i.image_data IS NOT NULL) as has_image_data, i.image_mime
+                FROM items i
+                WHERE i.title LIKE ?1 OR i.content LIKE ?1 OR i.preview LIKE ?1
+                ORDER BY i.sort_order ASC
+                LIMIT ?2 OFFSET ?3
+            ").map_err(|e| e.to_string())?;
             let rows = stmt
-                .query_map(rusqlite::params![query, limit, offset], map_item)
+                .query_map(rusqlite::params![like, limit, offset], map_item)
                 .map_err(|e| e.to_string())?
                 .collect::<Vec<_>>();
             return collect_items(rows);
@@ -172,7 +343,7 @@ fn get_items(
 
     let (sql, params): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(cid) = category_id {
         if cid == "root" {
-            ("SELECT i.id, i.title, i.type, i.content, i.preview, i.category_id, i.is_favorite, i.usage_count, i.created_at, i.updated_at, (i.image_data IS NOT NULL) as has_image_data, i.image_mime FROM items i ORDER BY i.usage_count DESC LIMIT ?1 OFFSET ?2".into(), vec![Box::new(limit), Box::new(offset)])
+            ("SELECT i.id, i.title, i.type, i.content, i.preview, i.category_id, i.is_favorite, i.usage_count, i.created_at, i.updated_at, (i.image_data IS NOT NULL) as has_image_data, i.image_mime FROM items i ORDER BY i.sort_order ASC LIMIT ?1 OFFSET ?2".into(), vec![Box::new(limit), Box::new(offset)])
         } else {
             ("
                 WITH RECURSIVE subcats AS (
@@ -182,11 +353,11 @@ fn get_items(
                 )
                 SELECT i.id, i.title, i.type, i.content, i.preview, i.category_id, i.is_favorite, i.usage_count, i.created_at, i.updated_at, (i.image_data IS NOT NULL) as has_image_data, i.image_mime FROM items i
                 WHERE i.category_id IN (SELECT id FROM subcats)
-                ORDER BY i.created_at DESC LIMIT ?2 OFFSET ?3
+                ORDER BY i.sort_order ASC LIMIT ?2 OFFSET ?3
             ".into(), vec![Box::new(cid), Box::new(limit), Box::new(offset)])
         }
     } else {
-        ("SELECT i.id, i.title, i.type, i.content, i.preview, i.category_id, i.is_favorite, i.usage_count, i.created_at, i.updated_at, (i.image_data IS NOT NULL) as has_image_data, i.image_mime FROM items i ORDER BY i.usage_count DESC LIMIT ?1 OFFSET ?2".into(), vec![Box::new(limit), Box::new(offset)])
+        ("SELECT i.id, i.title, i.type, i.content, i.preview, i.category_id, i.is_favorite, i.usage_count, i.created_at, i.updated_at, (i.image_data IS NOT NULL) as has_image_data, i.image_mime FROM items i ORDER BY i.sort_order ASC LIMIT ?1 OFFSET ?2".into(), vec![Box::new(limit), Box::new(offset)])
     };
 
     let mut stmt = db.prepare(&sql).map_err(|e| e.to_string())?;
@@ -634,6 +805,8 @@ pub fn run() {
             add_category,
             delete_category,
             rename_category,
+            reorder_items,
+            move_item_category,
             get_items,
             add_item,
             update_item,
@@ -645,7 +818,14 @@ pub fn run() {
             import_data,
             read_image,
             get_image_data,
+            fetch_url_preview,
             set_shortcut,
+            get_tags,
+            create_tag,
+            delete_tag,
+            add_item_tag,
+            remove_item_tag,
+            get_item_tags,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

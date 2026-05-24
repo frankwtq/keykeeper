@@ -29,3 +29,9 @@ export interface AppConfig {
     height: number;
   };
 }
+
+export interface Tag {
+  id: string;
+  name: string;
+  color: string;
+}
