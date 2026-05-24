@@ -9,7 +9,7 @@ import SearchBar from './components/SearchBar';
 import AddItemDialog from './components/AddItemDialog';
 import SettingsDialog from './components/SettingsDialog';
 import ConfirmDialog from './components/ConfirmDialog';
-import TranslationHistoryPanel from './components/TranslationHistoryPanel';
+import TranslateDialog from './components/TranslateDialog';
 import './App.css';
 
 const APP_VERSION = '0.4.0';
@@ -38,7 +38,7 @@ export default function App() {
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
   const [multiSelect, setMultiSelect] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [showTranslationHistory, setShowTranslationHistory] = useState(false);
+  const [showTranslate, setShowTranslate] = useState(false);
   // In-app keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -319,6 +319,7 @@ export default function App() {
           <button className="btn btn-sm" onClick={handleExport} title="📦 导出">📦</button>
           <button className="btn btn-sm" onClick={handleImport} title="📂 导入">📂</button>
           <button className="btn btn-sm" onClick={() => setShowSettings(true)} title="⚙ 设置">⚙</button>
+          <button className="btn btn-sm" onClick={() => setShowTranslate(true)} title="🌐 翻译">🌐</button>
           <button className="btn btn-primary" onClick={() => { setEditingItem(null); setShowAddDialog(true); }} title="⌘N 新增">+ 新增</button>
         </div>
       </header>
@@ -375,7 +376,6 @@ export default function App() {
               onEdit={handleEdit}
               onDelete={handleDeleteItem}
               onToggleFavorite={handleToggleFavorite}
-              onOpenHistory={() => setShowTranslationHistory(true)}
             />
           </aside>
         )}
@@ -403,8 +403,8 @@ export default function App() {
           onCancel={() => setConfirmDelete(null)}
         />
       )}
-      {showTranslationHistory && (
-        <TranslationHistoryPanel onClose={() => setShowTranslationHistory(false)} />
+      {showTranslate && (
+        <TranslateDialog onClose={() => setShowTranslate(false)} />
       )}
     </div>
   );

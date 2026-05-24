@@ -155,7 +155,7 @@ export async function moveItemCategory(id: string, categoryId: string | null): P
   return invoke('move_item_category', { id, categoryId });
 }
 
-export async function translateText(text: string): Promise<{ translatedText: string; detectedLang: string }> {
+export async function translateText(text: string): Promise<{ translated_text: string; detected_lang: string }> {
   return invoke('translate_text', { text });
 }
 
