@@ -24,6 +24,14 @@ struct Tag {
 }
 
 #[derive(Serialize)]
+struct TagWithCount {
+    id: String,
+    name: String,
+    color: String,
+    item_count: i32,
+}
+
+#[derive(Serialize)]
 struct UrlPreview {
     title: Option<String>,
     description: Option<String>,
@@ -62,6 +70,27 @@ fn get_tags(state: tauri::State<AppState>) -> Result<Vec<Tag>, String> {
 }
 
 #[tauri::command]
+fn get_tags_with_count(state: tauri::State<AppState>) -> Result<Vec<TagWithCount>, String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.name, t.color, COUNT(it.item_id) as item_count
+         FROM tags t LEFT JOIN item_tags it ON t.id = it.tag_id
+         GROUP BY t.id ORDER BY t.name"
+    ).map_err(|e| e.to_string())?;
+    let tags = stmt.query_map([], |row| {
+        Ok(TagWithCount {
+            id: row.get(0)?,
+            name: row.get(1)?,
+            color: row.get(2)?,
+            item_count: row.get(3)?,
+        })
+    }).map_err(|e| e.to_string())?
+    .filter_map(|r| r.ok())
+    .collect();
+    Ok(tags)
+}
+
+#[tauri::command]
 fn create_tag(state: tauri::State<AppState>, name: String, color: String) -> Result<Tag, String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     let id = uuid::Uuid::new_v4().to_string();
@@ -73,6 +102,13 @@ fn create_tag(state: tauri::State<AppState>, name: String, color: String) -> Res
 fn delete_tag(state: tauri::State<AppState>, id: String) -> Result<(), String> {
     let conn = state.db.lock().map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM tags WHERE id = ?1", rusqlite::params![id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn update_tag(state: tauri::State<AppState>, id: String, name: String, color: String) -> Result<(), String> {
+    let conn = state.db.lock().map_err(|e| e.to_string())?;
+    conn.execute("UPDATE tags SET name = ?1, color = ?2 WHERE id = ?3", rusqlite::params![name, color, id]).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -389,6 +425,7 @@ fn get_items(
     category_id: Option<String>,
     search: Option<String>,
     favorite_only: Option<bool>,
+    tag_ids: Option<Vec<String>>,
     limit: Option<i32>,
     offset: Option<i32>,
 ) -> Result<Vec<serde_json::Value>, String> {
@@ -426,7 +463,7 @@ fn get_items(
                     if let Ok(rows) = stmt.query_map(rusqlite::params![fts_query, limit, offset], map_item) {
                         let items: Vec<_> = rows.collect();
                         if items.iter().any(|r| r.is_ok()) {
-                            return collect_items(items);
+                            return filter_items_by_tags(collect_items(items)?, &*db, &tag_ids);
                         }
                     }
                 }
@@ -447,7 +484,7 @@ fn get_items(
                 .query_map(rusqlite::params![like, limit, offset], map_item)
                 .map_err(|e| e.to_string())?
                 .collect::<Vec<_>>();
-            return collect_items(rows);
+            return filter_items_by_tags(collect_items(rows)?, &*db, &tag_ids);
         }
     }
 
@@ -484,7 +521,7 @@ fn get_items(
         .query_map(param_refs.as_slice(), map_item)
         .map_err(|e| e.to_string())?
         .collect::<Vec<_>>();
-    collect_items(rows)
+    filter_items_by_tags(collect_items(rows)?, &*db, &tag_ids)
 }
 
 fn collect_items(
@@ -495,6 +532,30 @@ fn collect_items(
         items.push(row.map_err(|e| e.to_string())?);
     }
     Ok(items)
+}
+
+fn filter_items_by_tags(
+    items: Vec<serde_json::Value>,
+    db: &Connection,
+    tag_ids: &Option<Vec<String>>,
+) -> Result<Vec<serde_json::Value>, String> {
+    if let Some(ref ids) = tag_ids {
+        if ids.is_empty() {
+            return Ok(items);
+        }
+        let mut stmt = db.prepare(
+            "SELECT 1 FROM item_tags WHERE item_id = ?1 AND tag_id = ?2"
+        ).map_err(|e| e.to_string())?;
+        Ok(items.into_iter().filter(|item| {
+            let item_id = item["id"].as_str().unwrap_or("");
+            ids.iter().all(|tid| {
+                stmt.query_row(rusqlite::params![item_id, tid], |_| Ok(()))
+                    .is_ok()
+            })
+        }).collect())
+    } else {
+        Ok(items)
+    }
 }
 
 fn map_item(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
@@ -658,30 +719,58 @@ fn export_data(
     save_path: String,
 ) -> Result<(), String> {
     let data_dir = state.data_dir.clone();
+
+    // Step 1: Checkpoint WAL + read DB data under lock
+    let (db_data, items_for_xlsx, categories, tags_with_count) = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+            .map_err(|e| format!("WAL 检查点失败: {}", e))?;
+
+        let db_path = resolve_db_path(&data_dir);
+        let db_data = std::fs::read(&db_path).map_err(|e| format!("读取数据库失败: {}", e))?;
+
+        // Query categories for xlsx
+        let mut stmt = db.prepare("SELECT id, name, parent_id FROM categories ORDER BY name")
+            .map_err(|e| e.to_string())?;
+        let categories: Vec<(String, String, Option<String>)> = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        }).map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+        // Query items with tags for xlsx
+        let mut stmt = db.prepare(
+            "SELECT i.id, i.title, i.type, i.content, i.preview, i.category_id, i.is_favorite, i.usage_count, i.created_at, i.updated_at, COALESCE((SELECT GROUP_CONCAT(t.name, ', ') FROM item_tags it JOIN tags t ON t.id = it.tag_id WHERE it.item_id = i.id), '') FROM items i ORDER BY i.created_at DESC"
+        ).map_err(|e| e.to_string())?;
+        let items_for_xlsx: Vec<(String, String, String, String, String, Option<String>, bool, i32, String, String, String)> = stmt.query_map([], |row| {
+            let is_fav: i32 = row.get(6)?;
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, is_fav != 0, row.get(7)?, row.get(8)?, row.get(9)?, row.get(10)?))
+        }).map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+        // Query tags with count for xlsx
+        let mut stmt = db.prepare(
+            "SELECT t.id, t.name, t.color, COUNT(it.item_id) FROM tags t LEFT JOIN item_tags it ON t.id = it.tag_id GROUP BY t.id ORDER BY t.name"
+        ).map_err(|e| e.to_string())?;
+        let tags_with_count: Vec<(String, String, String, i32)> = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        }).map_err(|e| e.to_string())?
+        .filter_map(|r| r.ok())
+        .collect();
+
+        (db_data, items_for_xlsx, categories, tags_with_count)
+    };
+
+    // Step 2: Create zip (no lock needed)
     let file = std::fs::File::create(&save_path).map_err(|e| e.to_string())?;
     let mut zip_writer = zip::ZipWriter::new(file);
     let options = zip::write::FileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
 
-    // Add database
-    let db_path = data_dir.join("keykeeper.db");
-    if db_path.exists() {
-        zip_writer.start_file("keykeeper.db", options.clone())
-            .map_err(|e| e.to_string())?;
-        let mut db_file = std::fs::File::open(&db_path).map_err(|e| e.to_string())?;
-        std::io::copy(&mut db_file, &mut zip_writer).map_err(|e| e.to_string())?;
-    }
-
-    // Add WAL and SHM if they exist
-    for ext in ["db-wal", "db-shm"] {
-        let path = data_dir.join(format!("keykeeper.{}", ext));
-        if path.exists() {
-            zip_writer.start_file(format!("keykeeper.{}", ext), options.clone())
-                .map_err(|e| e.to_string())?;
-            let mut f = std::fs::File::open(&path).map_err(|e| e.to_string())?;
-            std::io::copy(&mut f, &mut zip_writer).map_err(|e| e.to_string())?;
-        }
-    }
+    zip_writer.start_file("keykeeper.db", options.clone())
+        .map_err(|e| e.to_string())?;
+    std::io::Write::write_all(&mut zip_writer, &db_data).map_err(|e| e.to_string())?;
 
     // Add images directory
     let images_dir = data_dir.join("images");
@@ -691,6 +780,13 @@ fn export_data(
     }
 
     zip_writer.finish().map_err(|e| e.to_string())?;
+
+    // Step 3: Generate xlsx alongside zip
+    let xlsx_path = std::path::PathBuf::from(&save_path)
+        .with_extension("xlsx");
+    let xlsx_data = generate_xlsx(&items_for_xlsx, &categories, &tags_with_count)?;
+    std::fs::write(&xlsx_path, xlsx_data).map_err(|e| format!("保存 Excel 失败: {}", e))?;
+
     Ok(())
 }
 
@@ -718,6 +814,104 @@ fn add_dir_to_zip(
         }
     }
     Ok(())
+}
+
+fn generate_xlsx(
+    items: &[(String, String, String, String, String, Option<String>, bool, i32, String, String, String)],
+    categories: &[(String, String, Option<String>)],
+    tags: &[(String, String, String, i32)],
+) -> Result<Vec<u8>, String> {
+    use rust_xlsxwriter::*;
+
+    let mut workbook = Workbook::new();
+
+    // --- Sheet 1: 条目列表 ---
+    let sheet1 = workbook.add_worksheet();
+    sheet1.set_name("条目列表").map_err(|e| e.to_string())?;
+
+    let headers1 = ["标题", "类型", "内容", "预览", "分类", "收藏", "使用次数", "标签", "创建时间", "更新时间"];
+    let header_format = Format::new().set_bold();
+    for (col, h) in headers1.iter().enumerate() {
+        sheet1.write_string_with_format(0, col as u16, *h, &header_format)
+            .map_err(|e| e.to_string())?;
+    }
+
+    let cat_map: std::collections::HashMap<&str, &str> = categories.iter()
+        .map(|(id, name, _)| (id.as_str(), name.as_str()))
+        .collect();
+
+    for (row, item) in items.iter().enumerate() {
+        let r = (row + 1) as u32;
+        let (_, title, typ, content, preview, cat_id, is_fav, usage, created, updated, tags_str) = item;
+
+        let content_trunc = if content.len() > 32767 {
+            format!("{}...（内容过长已截断）", &content[..32764])
+        } else {
+            content.clone()
+        };
+
+        let category_name = cat_id.as_ref()
+            .and_then(|id| cat_map.get(id.as_str()))
+            .unwrap_or(&"未分类")
+            .to_string();
+
+        sheet1.write_string(r, 0, truncate_str(title, 200)).map_err(|e| e.to_string())?;
+        sheet1.write_string(r, 1, typ).map_err(|e| e.to_string())?;
+        sheet1.write_string(r, 2, &content_trunc).map_err(|e| e.to_string())?;
+        sheet1.write_string(r, 3, truncate_str(preview, 200)).map_err(|e| e.to_string())?;
+        sheet1.write_string(r, 4, &category_name).map_err(|e| e.to_string())?;
+        sheet1.write_string(r, 5, if *is_fav { "是" } else { "否" }).map_err(|e| e.to_string())?;
+        sheet1.write_number(r, 6, *usage as f64).map_err(|e| e.to_string())?;
+        sheet1.write_string(r, 7, tags_str).map_err(|e| e.to_string())?;
+        sheet1.write_string(r, 8, created).map_err(|e| e.to_string())?;
+        sheet1.write_string(r, 9, updated).map_err(|e| e.to_string())?;
+    }
+
+    // --- Sheet 2: 分类列表 ---
+    let sheet2 = workbook.add_worksheet();
+    sheet2.set_name("分类列表").map_err(|e| e.to_string())?;
+
+    let headers2 = ["名称", "上级分类"];
+    for (col, h) in headers2.iter().enumerate() {
+        sheet2.write_string_with_format(0, col as u16, *h, &header_format)
+            .map_err(|e| e.to_string())?;
+    }
+
+    let mut row_idx: u32 = 1;
+    for (_, name, parent_id) in categories.iter() {
+        if name == "全部" { continue; }
+        let parent_name = parent_id.as_ref().and_then(|pid| cat_map.get(pid.as_str())).unwrap_or(&"-").to_string();
+        sheet2.write_string(row_idx, 0, name).map_err(|e| e.to_string())?;
+        sheet2.write_string(row_idx, 1, &parent_name).map_err(|e| e.to_string())?;
+        row_idx += 1;
+    }
+
+    // --- Sheet 3: 标签列表 ---
+    let sheet3 = workbook.add_worksheet();
+    sheet3.set_name("标签列表").map_err(|e| e.to_string())?;
+
+    let headers3 = ["名称", "颜色", "使用次数"];
+    for (col, h) in headers3.iter().enumerate() {
+        sheet3.write_string_with_format(0, col as u16, *h, &header_format)
+            .map_err(|e| e.to_string())?;
+    }
+
+    for (row, (_, name, color, count)) in tags.iter().enumerate() {
+        let r = (row + 1) as u32;
+        sheet3.write_string(r, 0, name).map_err(|e| e.to_string())?;
+        sheet3.write_string(r, 1, color).map_err(|e| e.to_string())?;
+        sheet3.write_number(r, 2, *count as f64).map_err(|e| e.to_string())?;
+    }
+
+    workbook.save_to_buffer().map_err(|e| e.to_string())
+}
+
+fn truncate_str(s: &str, max: usize) -> String {
+    if s.len() > max {
+        format!("{}...", &s[..max])
+    } else {
+        s.to_string()
+    }
 }
 
 #[tauri::command]
@@ -767,16 +961,26 @@ fn import_data(
 ) -> Result<(), String> {
     let data_dir = state.data_dir.clone();
 
-    // Read the zip file
+    // Step 1: Swap old connection to a temp file to release locks on real DB
+    let temp_db = data_dir.join("_import_temp_.db");
+    {
+        let mut db = state.db.lock().map_err(|e| e.to_string())?;
+        // Checkpoint and close the old connection by replacing with a temp one
+        db.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").ok();
+        let temp_conn = db::open_db(&temp_db).map_err(|e| e.to_string())?;
+        *db = temp_conn;
+    }
+    // Old connection is now dropped, real DB files are free
+
+    // Step 2: Extract zip
     let file = std::fs::File::open(&file_path).map_err(|e| e.to_string())?;
     let mut archive = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
 
-    // Extract all files
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).map_err(|e| e.to_string())?;
         let out_path = data_dir.join(entry.name());
         if let Some(parent) = out_path.parent() {
-            std::fs::create_dir_all(parent).ok();
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         if !entry.is_dir() {
             let mut out_file = std::fs::File::create(&out_path).map_err(|e| e.to_string())?;
@@ -784,12 +988,18 @@ fn import_data(
         }
     }
 
-    // Reopen database to pick up changes
+    // Step 3: Clean up temp file
+    std::fs::remove_file(&temp_db).ok();
+
+    // Step 4: Open new connection to the real DB
     let db_path = resolve_db_path(&data_dir);
+    // Remove stale WAL/SHM from old connection
+    std::fs::remove_file(data_dir.join("keykeeper.db-wal")).ok();
+    std::fs::remove_file(data_dir.join("keykeeper.db-shm")).ok();
     let new_conn = db::open_db(&db_path).map_err(|e| e.to_string())?;
     db::init_db(&new_conn).map_err(|e| e.to_string())?;
 
-    // Replace the connection in state
+    // Step 5: Replace temp connection with real one
     if let Ok(mut db) = state.db.lock() {
         *db = new_conn;
     }
@@ -939,7 +1149,9 @@ pub fn run() {
             fetch_url_preview,
             set_shortcut,
             get_tags,
+            get_tags_with_count,
             create_tag,
+            update_tag,
             delete_tag,
             add_item_tag,
             remove_item_tag,
@@ -951,4 +1163,170 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_db_path(dir: &std::path::Path) -> std::path::PathBuf {
+        dir.join("keykeeper.db")
+    }
+
+    fn setup_test_db(dir: &std::path::Path) -> rusqlite::Connection {
+        let db_path = test_db_path(dir);
+        let conn = db::open_db(&db_path).expect("open test db");
+        db::init_db(&conn).expect("init test db");
+
+        // Insert test category
+        conn.execute(
+            "INSERT INTO categories (id, name, parent_id, sort_order, created_at) VALUES (?1, ?2, ?3, 0, datetime('now'))",
+            rusqlite::params!["cat1", "技术", "root"],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO categories (id, name, parent_id, sort_order, created_at) VALUES (?1, ?2, ?3, 0, datetime('now'))",
+            rusqlite::params!["cat2", "生活", "root"],
+        ).unwrap();
+
+        // Insert test tags
+        conn.execute(
+            "INSERT INTO tags (id, name, color) VALUES (?1, ?2, ?3)",
+            rusqlite::params!["tag1", "rust", "#4361ee"],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO tags (id, name, color) VALUES (?1, ?2, ?3)",
+            rusqlite::params!["tag2", "macos", "#e67e22"],
+        ).unwrap();
+
+        // Insert test items
+        conn.execute(
+            "INSERT INTO items (id, title, type, content, preview, category_id, is_favorite, usage_count, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, 5, datetime('now'), datetime('now'))",
+            rusqlite::params!["item1", "测试条目", "url", "https://example.com", "示例预览", "cat1"],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO items (id, title, type, content, preview, category_id, is_favorite, usage_count, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, 2, datetime('now'), datetime('now'))",
+            rusqlite::params!["item2", "食谱", "text", "番茄炒蛋的做法", "简单好做", "cat2"],
+        ).unwrap();
+
+        // Link tags
+        conn.execute(
+            "INSERT INTO item_tags (item_id, tag_id) VALUES (?1, ?2)",
+            rusqlite::params!["item1", "tag1"],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO item_tags (item_id, tag_id) VALUES (?1, ?2)",
+            rusqlite::params!["item1", "tag2"],
+        ).unwrap();
+
+        conn
+    }
+
+    #[test]
+    fn test_export_import_roundtrip() {
+        let tmp = std::env::temp_dir().join(format!("keykeeper_test_{}", std::process::id()));
+        let src_dir = tmp.join("src");
+        let dst_dir = tmp.join("dst");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&dst_dir).unwrap();
+
+        // Setup source DB
+        let conn = setup_test_db(&src_dir);
+
+        // --- Export ---
+        // Checkpoint WAL (same as export_data)
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)").unwrap();
+
+        // Read DB into memory
+        let db_path = test_db_path(&src_dir);
+        let db_data = std::fs::read(&db_path).unwrap();
+
+        // Write zip
+        let zip_path = tmp.join("backup.zip");
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options: zip::write::FileOptions<()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file("keykeeper.db", options).unwrap();
+            std::io::Write::write_all(&mut zip, &db_data).unwrap();
+            zip.finish().unwrap();
+        }
+
+        // Generate xlsx (test the function)
+        let items: Vec<(String, String, String, String, String, Option<String>, bool, i32, String, String, String)> = Vec::new();
+        let categories: Vec<(String, String, Option<String>)> = Vec::new();
+        let tags: Vec<(String, String, String, i32)> = Vec::new();
+        let xlsx_data = generate_xlsx(&items, &categories, &tags).unwrap();
+        assert!(!xlsx_data.is_empty(), "xlsx should not be empty");
+
+        // Drop connection before import
+        drop(conn);
+
+        // --- Import ---
+        let zip_file = std::fs::File::open(&zip_path).unwrap();
+        let mut archive = zip::ZipArchive::new(zip_file).unwrap();
+
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i).unwrap();
+            let out_path = dst_dir.join(entry.name());
+            if let Some(parent) = out_path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            if !entry.is_dir() {
+                let mut out_file = std::fs::File::create(&out_path).unwrap();
+                std::io::copy(&mut entry, &mut out_file).unwrap();
+            }
+        }
+
+        // Open imported DB
+        let new_db_path = test_db_path(&dst_dir);
+        let new_conn = rusqlite::Connection::open(&new_db_path).unwrap();
+
+        // Verify data
+        let count: i32 = new_conn.query_row("SELECT COUNT(*) FROM items", [], |row| row.get(0)).unwrap();
+        assert_eq!(count, 2, "should have 2 items");
+
+        let cat_count: i32 = new_conn.query_row(
+            "SELECT COUNT(*) FROM categories WHERE id NOT IN ('root')",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(cat_count, 2, "should have 2 non-root categories");
+
+        let tag_count: i32 = new_conn.query_row("SELECT COUNT(*) FROM tags", [], |row| row.get(0)).unwrap();
+        assert_eq!(tag_count, 2, "should have 2 tags");
+
+        let tag_link_count: i32 = new_conn.query_row("SELECT COUNT(*) FROM item_tags", [], |row| row.get(0)).unwrap();
+        assert_eq!(tag_link_count, 2, "should have 2 tag links");
+
+        // Verify specific item data
+        let (title, content): (String, String) = new_conn.query_row(
+            "SELECT title, content FROM items WHERE id = 'item1'",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(title, "测试条目");
+        assert_eq!(content, "https://example.com");
+
+        // Clean up
+        drop(new_conn);
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn test_generate_xlsx_valid() {
+        let items = vec![
+            ("id1".into(), "测试文章".into(), "text".into(), "内容正文".into(), "摘要".into(), Some("cat1".into()), true, 10, "2025-01-01".into(), "2025-06-01".into(), "rust, macos".into()),
+        ];
+        let categories = vec![
+            ("cat1".into(), "技术".into(), Some("root".into())),
+            ("root".into(), "全部".into(), None),
+        ];
+        let tags = vec![
+            ("t1".into(), "rust".into(), "#4361ee".into(), 5),
+        ];
+
+        let data = generate_xlsx(&items, &categories, &tags).unwrap();
+        assert!(!data.is_empty(), "xlsx should not be empty");
+        // xlsx files start with PK\x03\x04
+        assert_eq!(&data[0..4], [0x50, 0x4B, 0x03, 0x04], "should have zip magic bytes");
+    }
 }

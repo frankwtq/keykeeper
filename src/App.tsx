@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { getConfig, getCategories, getItems, addCategory, deleteCategory, addItem, updateItem, deleteItem, incrementUsage, toggleFavorite, renameCategory, exportData, importData, setShortcut, reorderItems, moveItemCategory } from './api';
+import { getConfig, getCategories, getItems, addCategory, deleteCategory, addItem, updateItem, deleteItem, incrementUsage, toggleFavorite, renameCategory, exportData, importData, setShortcut, reorderItems, moveItemCategory, getTagsWithCount } from './api';
 import type { AppConfig, Category, Item } from './types';
 import Sidebar from './components/Sidebar';
 import ItemList from './components/ItemList';
@@ -10,6 +10,7 @@ import AddItemDialog from './components/AddItemDialog';
 import SettingsDialog from './components/SettingsDialog';
 import ConfirmDialog from './components/ConfirmDialog';
 import TranslateDialog from './components/TranslateDialog';
+import TagManagerDialog from './components/TagManagerDialog';
 import './App.css';
 
 const APP_VERSION = '0.4.0';
@@ -39,6 +40,9 @@ export default function App() {
   const [multiSelect, setMultiSelect] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [showTranslate, setShowTranslate] = useState(false);
+  const [allTags, setAllTags] = useState<{ id: string; name: string; color: string; item_count: number }[]>([]);
+  const [selectedTagIds, setSelectedTagIds] = useState<Set<string>>(new Set());
+  const [showTagManager, setShowTagManager] = useState(false);
   // In-app keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -71,30 +75,38 @@ export default function App() {
     setCategories(cats);
   };
 
-  const loadItems = useCallback(async (catId: string, search: string) => {
+  const loadItems = useCallback(async (catId: string, search: string, tagIds?: Set<string>) => {
     const result = await getItems({
       categoryId: catId === 'root' || catId === '_favorites' ? undefined : catId,
       search: search || undefined,
       favoriteOnly: catId === '_favorites' || undefined,
+      tagIds: tagIds && tagIds.size > 0 ? Array.from(tagIds) : undefined,
     });
     setItems(result);
+  }, []);
+
+  const loadTags = useCallback(async () => {
+    const tags = await getTagsWithCount();
+    setAllTags(tags);
   }, []);
 
   useEffect(() => {
     getConfig().then(setConfig);
     loadCategories();
-    loadItems('root', '');
-  }, [loadItems]);
+    loadTags();
+    loadItems('root', '', new Set());
+  }, [loadItems, loadTags]);
 
   const handleSearch = (query: string) => {
     setSearchQuery(query);
-    loadItems(selectedCategory, query);
+    loadItems(selectedCategory, query, selectedTagIds);
   };
 
   const handleCategorySelect = (id: string) => {
     setSelectedCategory(id);
     setSearchQuery('');
-    loadItems(id, '');
+    setSelectedTagIds(new Set());
+    loadItems(id, '', new Set());
   };
 
   useEffect(() => {
@@ -131,7 +143,7 @@ export default function App() {
       await addItem(item);
     }
     setShowAddDialog(false);
-    await loadItems(selectedCategory, searchQuery);
+    await loadItems(selectedCategory, searchQuery, selectedTagIds);
   };
 
   const handleDeleteItem = async (id: string) => {
@@ -140,7 +152,7 @@ export default function App() {
       onConfirm: async () => {
         await deleteItem(id);
         setSelectedItem(null);
-        await loadItems(selectedCategory, searchQuery);
+        await loadItems(selectedCategory, searchQuery, selectedTagIds);
         setConfirmDelete(null);
       },
     });
@@ -197,7 +209,7 @@ export default function App() {
       if (path) {
         await importData(path as string);
         await loadCategories();
-        await loadItems(selectedCategory, searchQuery);
+        await loadItems(selectedCategory, searchQuery, selectedTagIds);
         setSelectedItem(null);
       }
     } catch (e) {
@@ -228,12 +240,12 @@ export default function App() {
   const handleReorder = async (reordered: { id: string; sort_order: number }[]) => {
     setSortField('sort_order');
     await reorderItems(reordered);
-    await loadItems(selectedCategory, searchQuery);
+    await loadItems(selectedCategory, searchQuery, selectedTagIds);
   };
 
   const handleMoveToCategory = async (itemId: string, categoryId: string) => {
     await moveItemCategory(itemId, categoryId === 'root' ? null : categoryId);
-    await loadItems(selectedCategory, searchQuery);
+    await loadItems(selectedCategory, searchQuery, selectedTagIds);
   };
 
   const handleToggleMultiSelect = () => {
@@ -251,7 +263,7 @@ export default function App() {
         setSelectedItem(null);
         setSelectedIds(new Set());
         setMultiSelect(false);
-        await loadItems(selectedCategory, searchQuery);
+        await loadItems(selectedCategory, searchQuery, selectedTagIds);
         setConfirmDelete(null);
       },
     });
@@ -263,7 +275,20 @@ export default function App() {
     }
     setSelectedIds(new Set());
     setMultiSelect(false);
-    await loadItems(selectedCategory, searchQuery);
+    await loadItems(selectedCategory, searchQuery, selectedTagIds);
+  };
+
+  const handleTagSelect = (tagId: string) => {
+    setSelectedTagIds(prev => {
+      const next = new Set(prev);
+      if (next.has(tagId)) {
+        next.delete(tagId);
+      } else {
+        next.add(tagId);
+      }
+      loadItems(selectedCategory, searchQuery, next);
+      return next;
+    });
   };
 
   if (!config) return null;
@@ -349,6 +374,10 @@ export default function App() {
             onDelete={handleDeleteCategory}
             maxDepth={config.max_category_depth}
             onMoveItem={multiSelect ? (_itemId, categoryId) => handleBatchMove(categoryId) : handleMoveToCategory}
+            tags={allTags}
+            selectedTagIds={selectedTagIds}
+            onTagSelect={handleTagSelect}
+            onOpenTagManager={() => setShowTagManager(true)}
           />
         </aside>
         <main className="app-main">
@@ -405,6 +434,9 @@ export default function App() {
       )}
       {showTranslate && (
         <TranslateDialog onClose={() => setShowTranslate(false)} />
+      )}
+      {showTagManager && (
+        <TagManagerDialog onClose={() => { setShowTagManager(false); loadTags(); }} />
       )}
     </div>
   );

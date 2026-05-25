@@ -28,6 +28,7 @@ export async function deleteCategory(id: string): Promise<void> {
 export interface GetItemsParams {
   categoryId?: string;
   search?: string;
+  tagIds?: string[];
   favoriteOnly?: boolean;
   limit?: number;
   offset?: number;
@@ -37,6 +38,7 @@ export async function getItems(params?: GetItemsParams): Promise<Item[]> {
   return invoke('get_items', {
     categoryId: params?.categoryId || null,
     search: params?.search || null,
+    tagIds: params?.tagIds || null,
     favoriteOnly: params?.favoriteOnly || null,
     limit: params?.limit || 50,
     offset: params?.offset || 0,
@@ -127,12 +129,20 @@ export async function getTags(): Promise<Tag[]> {
   return invoke('get_tags');
 }
 
+export async function getTagsWithCount(): Promise<(Tag & { item_count: number })[]> {
+  return invoke('get_tags_with_count');
+}
+
 export async function createTag(name: string, color: string): Promise<Tag> {
   return invoke('create_tag', { name, color });
 }
 
 export async function deleteTag(id: string): Promise<void> {
   return invoke('delete_tag', { id });
+}
+
+export async function updateTag(id: string, name: string, color: string): Promise<void> {
+  return invoke('update_tag', { id, name, color });
 }
 
 export async function addItemTag(itemId: string, tagId: string): Promise<void> {
