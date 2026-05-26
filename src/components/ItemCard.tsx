@@ -30,6 +30,14 @@ function highlightText(text: string, query: string) {
   );
 }
 
+function getDomain(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+}
+
 export default function ItemCard({ item, isSelected, highlight, multiSelect, checked, onCheckChange, onClick, onToggleFavorite, onEdit, onDelete }: Props) {
   return (
     <div
@@ -62,8 +70,16 @@ export default function ItemCard({ item, isSelected, highlight, multiSelect, che
           flexShrink: 0,
         }}
       />
-      <span style={{ fontSize: 18, flexShrink: 0, marginTop: 1 }}>
-        {TYPE_ICONS[item.type] || '📄'}
+      <span style={{ fontSize: 18, flexShrink: 0, marginTop: 1, display: 'flex', alignItems: 'center', gap: 2, minWidth: 20, justifyContent: 'center' }}>
+        {item.type === 'url' ? (
+          <img
+            src={`https://www.google.com/s2/favicons?domain=${getDomain(item.content)}&sz=16`}
+            style={{ width: 16, height: 16 }}
+            onError={e => { (e.target as HTMLImageElement).style.display = 'none'; (e.target as HTMLImageElement).nextElementSibling?.removeAttribute('hidden'); }}
+            alt=""
+          />
+        ) : null}
+        <span hidden={item.type === 'url'}>{TYPE_ICONS[item.type] || '📄'}</span>
       </span>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{

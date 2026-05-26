@@ -253,6 +253,88 @@ fn clear_translation_history(state: tauri::State<AppState>) -> Result<(), String
     Ok(())
 }
 
+#[derive(Serialize)]
+struct CategorySuggestion {
+    category_id: Option<String>,
+    category_name: String,
+}
+
+#[tauri::command]
+async fn suggest_category(
+    state: tauri::State<'_, AppState>,
+    title: String,
+    content: String,
+) -> Result<Option<CategorySuggestion>, String> {
+    // Read config and categories under lock
+    let (categories, config) = {
+        let db = state.db.lock().map_err(|e| e.to_string())?;
+        let cfg = state.config.lock().map_err(|e| e.to_string())?;
+
+        let mut stmt = db
+            .prepare("SELECT id, name FROM categories WHERE id != 'root' ORDER BY name")
+            .map_err(|e| e.to_string())?;
+        let cats: Vec<(String, String)> = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(|e| e.to_string())?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        (cats, cfg.clone())
+    };
+
+    if config.ai_provider == "off" || categories.is_empty() {
+        return Ok(None);
+    }
+
+    let category_names: Vec<String> = categories.iter().map(|(_, name)| name.clone()).collect();
+    let prompt = format!(
+        "你是一个分类助手。根据标题和内容，从以下分类中选择最合适的一个。只返回分类名称，不要解释。若都不匹配，返回\"未分类\"。\n\n标题: {}\n内容: {}\n\n可选分类: {}",
+        title,
+        if content.len() > 1000 { &content[..1000] } else { &content },
+        category_names.join(", ")
+    );
+
+    let body = serde_json::json!({
+        "model": config.ai_model,
+        "messages": [
+            {"role": "system", "content": "你是一个分类助手。根据标题和内容选择最合适的分类。只返回分类名称，不要解释。"},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.1,
+        "max_tokens": 50,
+    });
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let api_url = format!("{}/chat/completions", config.ai_api_url.trim_end_matches('/'));
+    let mut req = client.post(&api_url).json(&body);
+    if !config.ai_api_key.is_empty() {
+        req = req.header("Authorization", format!("Bearer {}", config.ai_api_key));
+    }
+
+    let resp = req.send().await.map_err(|e| format!("AI 请求失败: {}", e))?;
+    let result: serde_json::Value = resp.json().await.map_err(|e| format!("AI 响应解析失败: {}", e))?;
+
+    let ai_answer = result["choices"][0]["message"]["content"]
+        .as_str()
+        .unwrap_or("未分类")
+        .trim()
+        .to_string();
+
+    // Fuzzy match: try exact match first, then case-insensitive
+    let matched = categories.iter().find(|(_, name)| {
+        name == &ai_answer || name.to_lowercase() == ai_answer.to_lowercase()
+    });
+
+    Ok(Some(CategorySuggestion {
+        category_id: matched.map(|(id, _)| id.clone()),
+        category_name: ai_answer,
+    }))
+}
+
 fn extract_tag<'a>(lower: &'a str, tag: &str) -> Option<&'a str> {
     let open = format!("<{}>", tag);
     let close = format!("</{}>", tag);
@@ -1160,6 +1242,7 @@ pub fn run() {
             add_translation_history,
             get_translation_history,
             clear_translation_history,
+            suggest_category,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -29,6 +29,10 @@ export interface AppConfig {
     height: number;
   };
   translation_history_max: number;
+  ai_provider: string;
+  ai_api_url: string;
+  ai_api_key: string;
+  ai_model: string;
 }
 
 export interface Tag {

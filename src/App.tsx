@@ -176,9 +176,9 @@ export default function App() {
     setShowAddDialog(true);
   };
 
-  const handleSaveSettings = async (shortcut: string, translationHistoryMax: number) => {
+  const handleSaveSettings = async (shortcut: string, translationHistoryMax: number, aiProvider: string, aiApiUrl: string, aiApiKey: string, aiModel: string) => {
     await setShortcut(shortcut);
-    const newConfig = { ...config!, global_shortcut: shortcut, translation_history_max: translationHistoryMax };
+    const newConfig = { ...config!, global_shortcut: shortcut, translation_history_max: translationHistoryMax, ai_provider: aiProvider, ai_api_url: aiApiUrl, ai_api_key: aiApiKey, ai_model: aiModel };
     await invoke('set_config', { config: newConfig });
     const freshConfig = await getConfig();
     setConfig(freshConfig);
@@ -291,6 +291,11 @@ export default function App() {
     });
   };
 
+  const handleClearTags = () => {
+    setSelectedTagIds(new Set());
+    loadItems(selectedCategory, searchQuery, new Set());
+  };
+
   if (!config) return null;
 
   return (
@@ -394,6 +399,10 @@ export default function App() {
             onEdit={handleEdit}
             onReorder={handleReorder}
             onMoveItem={multiSelect ? (_itemId, categoryId) => handleBatchMove(categoryId) : handleMoveToCategory}
+            allTags={allTags}
+            selectedTagIds={selectedTagIds}
+            onTagSelect={handleTagSelect}
+            onClearTags={handleClearTags}
           />
         </main>
         {selectedItem && (
@@ -419,8 +428,7 @@ export default function App() {
       )}
       {showSettings && config && (
         <SettingsDialog
-          shortcut={config.global_shortcut}
-          translationHistoryMax={config.translation_history_max}
+          config={config}
           onSave={handleSaveSettings}
           onClose={() => setShowSettings(false)}
         />

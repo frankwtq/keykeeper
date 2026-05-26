@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import type { Item } from '../types';
+import type { Item, Tag } from '../types';
 import ItemCard from './ItemCard';
 
 interface Props {
@@ -15,9 +15,13 @@ interface Props {
   onEdit: (item: Item) => void;
   onReorder?: (items: { id: string; sort_order: number }[]) => void;
   onMoveItem?: (itemId: string, categoryId: string) => Promise<void>;
+  allTags?: Tag[];
+  selectedTagIds?: Set<string>;
+  onTagSelect?: (tagId: string) => void;
+  onClearTags?: () => void;
 }
 
-export default function ItemList({ items, selectedId, highlight, multiSelect, selectedIds, onSelectionChange, onItemClick, onToggleFavorite, onDelete, onEdit, onReorder, onMoveItem }: Props) {
+export default function ItemList({ items, selectedId, highlight, multiSelect, selectedIds, onSelectionChange, onItemClick, onToggleFavorite, onDelete, onEdit, onReorder, onMoveItem, allTags, selectedTagIds, onTagSelect, onClearTags }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{
     itemId: string;
@@ -212,6 +216,35 @@ export default function ItemList({ items, selectedId, highlight, multiSelect, se
       onPointerDown={handlePointerDown}
       style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
     >
+      {selectedTagIds && selectedTagIds.size > 0 && allTags && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '6px 10px', background: 'var(--bg-active)',
+          borderRadius: 'var(--radius)', fontSize: 12,
+        }}>
+          <span style={{ fontWeight: 500, color: 'var(--text-secondary)' }}>🏷 过滤</span>
+          {Array.from(selectedTagIds).map(tid => {
+            const tag = allTags.find(t => t.id === tid);
+            if (!tag) return null;
+            return (
+              <span
+                key={tid}
+                onClick={() => onTagSelect?.(tid)}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 3,
+                  padding: '2px 8px', borderRadius: 10, fontSize: 11,
+                  cursor: 'pointer', background: tag.color + '20',
+                  color: tag.color, border: `1px solid ${tag.color}40`,
+                }}
+              >{tag.name} <span style={{ opacity: 0.5, fontSize: 10 }}>✕</span></span>
+            );
+          })}
+          <button
+            onClick={() => onClearTags?.()}
+            style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 11 }}
+          >清除</button>
+        </div>
+      )}
       {items.map((item) => (
         <ItemCard
           key={item.id}

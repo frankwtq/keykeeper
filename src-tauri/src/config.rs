@@ -9,6 +9,10 @@ pub struct AppConfig {
     pub auto_start: bool,
     pub window: WindowConfig,
     pub translation_history_max: i32,
+    pub ai_provider: String,
+    pub ai_api_url: String,
+    pub ai_api_key: String,
+    pub ai_model: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -28,6 +32,10 @@ impl Default for AppConfig {
                 height: 700.0,
             },
             translation_history_max: 50,
+            ai_provider: "off".into(),
+            ai_api_url: "http://localhost:11434/v1".into(),
+            ai_api_key: String::new(),
+            ai_model: "qwen2.5".into(),
         }
     }
 }

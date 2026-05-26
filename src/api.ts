@@ -185,3 +185,7 @@ export async function getTranslationHistory(limit?: number): Promise<Translation
 export async function clearTranslationHistory(): Promise<void> {
   return invoke('clear_translation_history');
 }
+
+export async function suggestCategory(title: string, content: string): Promise<{ category_id: string | null; category_name: string } | null> {
+  return invoke('suggest_category', { title, content });
+}

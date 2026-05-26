@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
+import type { AppConfig } from '../types';
 
 interface Props {
-  shortcut: string;
-  translationHistoryMax: number;
-  onSave: (shortcut: string, translationHistoryMax: number) => Promise<void>;
+  config: AppConfig;
+  onSave: (shortcut: string, translationHistoryMax: number, aiProvider: string, aiApiUrl: string, aiApiKey: string, aiModel: string) => Promise<void>;
   onClose: () => void;
 }
 
@@ -29,9 +29,13 @@ function displayShortcut(s: string): string {
     .replace('Space', '␣');
 }
 
-export default function SettingsDialog({ shortcut: initialShortcut, translationHistoryMax: initialMax, onSave, onClose }: Props) {
-  const [shortcut, setShortcut] = useState(initialShortcut);
-  const [translationHistoryMax, setTranslationHistoryMax] = useState(initialMax);
+export default function SettingsDialog({ config: initialConfig, onSave, onClose }: Props) {
+  const [shortcut, setShortcut] = useState(initialConfig.global_shortcut);
+  const [translationHistoryMax, setTranslationHistoryMax] = useState(initialConfig.translation_history_max);
+  const [aiProvider, setAiProvider] = useState(initialConfig.ai_provider);
+  const [aiApiUrl, setAiApiUrl] = useState(initialConfig.ai_api_url);
+  const [aiApiKey, setAiApiKey] = useState(initialConfig.ai_api_key);
+  const [aiModel, setAiModel] = useState(initialConfig.ai_model);
   const [recording, setRecording] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -63,7 +67,7 @@ export default function SettingsDialog({ shortcut: initialShortcut, translationH
         setSaving(false);
         return;
       }
-      await onSave(shortcut, translationHistoryMax);
+      await onSave(shortcut, translationHistoryMax, aiProvider, aiApiUrl, aiApiKey, aiModel);
       onClose();
     } catch (e) {
       setError(String(e));
@@ -174,6 +178,71 @@ export default function SettingsDialog({ shortcut: initialShortcut, translationH
             }}
           />
           <div style={{ marginTop: 4, fontSize: 11, color: 'var(--text-secondary)' }}>默认为 50，设为 0 则不保留</div>
+        </div>
+
+        <div style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+          <label style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8, display: 'block', fontWeight: 600 }}>
+            🤖 AI 自动归类
+          </label>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+            <select
+              value={aiProvider}
+              onChange={e => setAiProvider(e.target.value)}
+              style={{
+                flex: 1, padding: '6px 10px', border: '1px solid var(--border)',
+                borderRadius: 'var(--radius)', background: 'var(--bg)', color: 'var(--text)',
+                fontSize: 13, outline: 'none',
+              }}
+            >
+              <option value="off">关闭</option>
+              <option value="ollama">Ollama（本地）</option>
+              <option value="openai">OpenAI 兼容</option>
+            </select>
+          </div>
+          {aiProvider !== 'off' && (
+            <>
+              <div style={{ marginBottom: 6 }}>
+                <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 2, display: 'block' }}>API URL</label>
+                <input
+                  value={aiApiUrl}
+                  onChange={e => setAiApiUrl(e.target.value)}
+                  placeholder="http://localhost:11434/v1"
+                  style={{
+                    width: '100%', padding: '6px 10px', border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius)', background: 'var(--bg)', color: 'var(--text)',
+                    fontSize: 13, outline: 'none', boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+              <div style={{ marginBottom: 6 }}>
+                <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 2, display: 'block' }}>API Key（可选）</label>
+                <input
+                  type="password"
+                  value={aiApiKey}
+                  onChange={e => setAiApiKey(e.target.value)}
+                  placeholder="sk-..."
+                  style={{
+                    width: '100%', padding: '6px 10px', border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius)', background: 'var(--bg)', color: 'var(--text)',
+                    fontSize: 13, outline: 'none', boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+              <div style={{ marginBottom: 4 }}>
+                <label style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 2, display: 'block' }}>模型</label>
+                <input
+                  value={aiModel}
+                  onChange={e => setAiModel(e.target.value)}
+                  placeholder="qwen2.5"
+                  style={{
+                    width: '100%', padding: '6px 10px', border: '1px solid var(--border)',
+                    borderRadius: 'var(--radius)', background: 'var(--bg)', color: 'var(--text)',
+                    fontSize: 13, outline: 'none', boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+            </>
+          )}
         </div>
 
         {error && (

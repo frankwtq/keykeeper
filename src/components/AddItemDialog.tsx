@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import type { Category, Item } from '../types';
-import { saveImageFile, fetchUrlPreview } from '../api';
+import { saveImageFile, fetchUrlPreview, suggestCategory } from '../api';
 
 const MAX_PASTE_IMAGE_SIZE = 5 * 1024 * 1024; // 5MB
 
@@ -23,6 +23,8 @@ export default function AddItemDialog({ categories, editItem, onSave, onClose }:
   const [pasteWarning, setPasteWarning] = useState<string | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [pasteBlob, setPasteBlob] = useState<Blob | null>(null);
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestion, setSuggestion] = useState<{ category_id: string | null; category_name: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -154,6 +156,28 @@ export default function AddItemDialog({ categories, editItem, onSave, onClose }:
       setSaving(false);
     }
   };
+
+  const handleSuggest = async () => {
+    const text = (type === 'url' ? content : content).trim();
+    if (!text && !title.trim()) return;
+    setSuggesting(true);
+    setSuggestion(null);
+    try {
+      const result = await suggestCategory(title.trim(), text);
+      if (result) {
+        setSuggestion(result);
+      }
+    } catch {
+      // silently fail
+    } finally {
+      setSuggesting(false);
+    }
+  };
+
+  // Clear suggestion when title or content changes
+  useEffect(() => {
+    setSuggestion(null);
+  }, [title, content]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -364,7 +388,35 @@ export default function AddItemDialog({ categories, editItem, onSave, onClose }:
         )}
 
         <div>
-          <label style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 4, display: 'block' }}>分类</label>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
+            <label style={{ fontSize: 12, color: 'var(--text-secondary)', display: 'block' }}>分类</label>
+            <button
+              className="btn btn-sm"
+              onClick={handleSuggest}
+              disabled={suggesting}
+              style={{ fontSize: 11, marginLeft: 'auto' }}
+              title="AI 根据标题和内容自动建议分类"
+            >{suggesting ? '⏳ AI 分析中...' : '🤖 AI 建议分类'}</button>
+          </div>
+          {suggestion && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '4px 10px', marginBottom: 4,
+              background: 'var(--accent-light)', borderRadius: 'var(--radius)', fontSize: 12,
+            }}>
+              <span>AI 建议: <strong>{suggestion.category_name}</strong></span>
+              <button
+                className="btn btn-sm"
+                style={{ fontSize: 11 }}
+                onClick={() => { setSuggestion(null); if (suggestion.category_id) setCategoryId(suggestion.category_id); }}
+              >应用</button>
+              <button
+                className="btn btn-sm"
+                style={{ fontSize: 11 }}
+                onClick={() => setSuggestion(null)}
+              >忽略</button>
+            </div>
+          )}
           <select
             value={categoryId}
             onChange={e => setCategoryId(e.target.value)}
