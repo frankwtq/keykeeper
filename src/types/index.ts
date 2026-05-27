@@ -18,6 +18,7 @@ export interface Item {
   updated_at: string;
   has_image_data: boolean;
   image_mime: string | null;
+  tags: { id: string; name: string; color: string }[];
 }
 
 export interface AppConfig {

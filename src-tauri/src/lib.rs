@@ -545,7 +545,9 @@ fn get_items(
                     if let Ok(rows) = stmt.query_map(rusqlite::params![fts_query, limit, offset], map_item) {
                         let items: Vec<_> = rows.collect();
                         if items.iter().any(|r| r.is_ok()) {
-                            return filter_items_by_tags(collect_items(items)?, &*db, &tag_ids);
+                            let mut collected = collect_items(items)?;
+                            add_tags_to_items(&mut collected, &*db)?;
+                            return filter_items_by_tags(collected, &*db, &tag_ids);
                         }
                     }
                 }
@@ -566,7 +568,9 @@ fn get_items(
                 .query_map(rusqlite::params![like, limit, offset], map_item)
                 .map_err(|e| e.to_string())?
                 .collect::<Vec<_>>();
-            return filter_items_by_tags(collect_items(rows)?, &*db, &tag_ids);
+            let mut collected = collect_items(rows)?;
+            add_tags_to_items(&mut collected, &*db)?;
+            return filter_items_by_tags(collected, &*db, &tag_ids);
         }
     }
 
@@ -603,7 +607,9 @@ fn get_items(
         .query_map(param_refs.as_slice(), map_item)
         .map_err(|e| e.to_string())?
         .collect::<Vec<_>>();
-    filter_items_by_tags(collect_items(rows)?, &*db, &tag_ids)
+    let mut items = collect_items(rows)?;
+    add_tags_to_items(&mut items, &*db)?;
+    filter_items_by_tags(items, &*db, &tag_ids)
 }
 
 fn collect_items(
@@ -654,7 +660,58 @@ fn map_item(row: &rusqlite::Row) -> rusqlite::Result<serde_json::Value> {
         "updated_at": row.get::<_, String>(9)?,
         "has_image_data": row.get::<_, bool>(10)?,
         "image_mime": row.get::<_, Option<String>>(11)?,
+        "tags": [],
     }))
+}
+
+fn add_tags_to_items(
+    items: &mut Vec<serde_json::Value>,
+    db: &Connection,
+) -> Result<(), String> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    let item_ids: Vec<String> = items.iter()
+        .filter_map(|i| i["id"].as_str().map(String::from))
+        .collect();
+
+    let placeholders: Vec<String> = (0..item_ids.len())
+        .map(|i| format!("?{}", i + 1))
+        .collect();
+
+    let sql = format!(
+        "SELECT it.item_id, t.id, t.name, t.color FROM item_tags it JOIN tags t ON t.id = it.tag_id WHERE it.item_id IN ({})",
+        placeholders.join(",")
+    );
+
+    let mut stmt = db.prepare(&sql).map_err(|e| e.to_string())?;
+    let params: Vec<&dyn rusqlite::types::ToSql> = item_ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+
+    let mut item_tag_map: std::collections::HashMap<String, Vec<serde_json::Value>> = std::collections::HashMap::new();
+    if let Ok(rows) = stmt.query_map(params.as_slice(), |row| {
+        let item_id: String = row.get(0)?;
+        let tag = serde_json::json!({
+            "id": row.get::<_, String>(1)?,
+            "name": row.get::<_, String>(2)?,
+            "color": row.get::<_, String>(3)?,
+        });
+        Ok((item_id, tag))
+    }) {
+        for row in rows {
+            if let Ok((item_id, tag)) = row {
+                item_tag_map.entry(item_id).or_default().push(tag);
+            }
+        }
+    }
+
+    for item in items.iter_mut() {
+        let id = item["id"].as_str().unwrap_or("");
+        if let Some(tags) = item_tag_map.remove(id) {
+            item["tags"] = serde_json::Value::Array(tags);
+        }
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

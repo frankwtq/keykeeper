@@ -1,4 +1,5 @@
 import type { Item } from '../types';
+import { open } from '@tauri-apps/plugin-shell';
 
 const TYPE_ICONS: Record<string, string> = {
   url: '🔗',
@@ -101,12 +102,30 @@ export default function ItemCard({ item, isSelected, highlight, multiSelect, che
         }}>
           {highlightText(item.preview || item.content?.slice(0, 80) || '', highlight || '')}
         </div>
+        {item.tags && item.tags.length > 0 && (
+          <div style={{ display: 'flex', gap: 3, marginTop: 4, flexWrap: 'wrap' }}>
+            {item.tags.map(t => (
+              <span key={t.id} style={{
+                display: 'inline-block', padding: '0 6px', borderRadius: 8, fontSize: 10,
+                background: t.color + '20', color: t.color, border: `1px solid ${t.color}40`,
+                lineHeight: '16px',
+              }}>{t.name}</span>
+            ))}
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 8, marginTop: 4, fontSize: 11, color: 'var(--text-secondary)' }}>
           <span>使用 {item.usage_count} 次</span>
           {item.is_favorite && <span>⭐ 收藏</span>}
         </div>
       </div>
       <div style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
+        {item.type === 'url' && (
+          <button
+            className="btn-icon"
+            onClick={e => { e.stopPropagation(); open(item.content); }}
+            title="打开链接"
+          >↗</button>
+        )}
         <button
           className="btn-icon"
           onClick={e => { e.stopPropagation(); onToggleFavorite(); }}
