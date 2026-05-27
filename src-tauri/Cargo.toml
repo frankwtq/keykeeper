@@ -1,6 +1,6 @@
 [package]
 name = "keykeeper"
-version = "0.1.0"
+version = "0.5.0"
 description = "KeyKeeper - Knowledge Card Manager"
 authors = ["you"]
 license = ""

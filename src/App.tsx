@@ -13,7 +13,7 @@ import TranslateDialog from './components/TranslateDialog';
 import TagManagerDialog from './components/TagManagerDialog';
 import './App.css';
 
-const APP_VERSION = '0.4.0';
+const APP_VERSION = '0.5.0';
 
 type SortField = 'usage_count' | 'created_at' | 'updated_at' | 'sort_order';
 
